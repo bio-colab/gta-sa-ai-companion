@@ -247,25 +247,29 @@ def apply_persona_command(user_text: str) -> bool:
     if not persona_info:
         return False
 
-    npc_model = latest_game_context.get("npc_model", 107) if latest_game_context else 107
-    identity = brain.get_or_create_identity(npc_model)
-    npc_name = identity.get("name", "Companion")
+    try:
+        npc_model = latest_game_context.get("npc_model", 107) if latest_game_context else 107
+        identity = brain.get_or_create_identity(npc_model)
+        npc_name = identity.get("name", "Companion")
 
-    # تحديث وتخزين الشخصية في مخ الذكاء الاصطناعي وقاعدة البيانات الدائمة SQLite
-    intro_quote = brain.set_custom_persona(npc_model, persona_info)
+        # تحديث وتخزين الشخصية في مخ الذكاء الاصطناعي وقاعدة البيانات الدائمة SQLite
+        intro_quote = brain.set_custom_persona(npc_model, persona_info)
 
-    p_type = persona_info.get("type", "custom")
-    bridge_state["active_persona"] = p_type
-    ini.update_bridge_section(bridge_state)
+        p_type = persona_info.get("type", "custom")
+        bridge_state["active_persona"] = p_type
+        ini.update_bridge_section(bridge_state)
 
-    # إرسال إشعار للشاشة وتفعيل قدرات السكريبت فوراً
-    queue_say(f"{persona_info['gta_subtitle']}~n~~y~{npc_name}:~w~ {intro_quote}")
-    if persona_info.get("action"):
-        queue_action(persona_info["action"])
+        # إرسال إشعار للشاشة وتفعيل قدرات السكريبت فوراً
+        queue_say(f"{persona_info['gta_subtitle']}~n~~y~{npc_name}:~w~ {intro_quote}")
+        if persona_info.get("action"):
+            queue_action(persona_info["action"])
 
-    log(f"[PERSONA ACTIVATED] [{persona_info['title']}] assigned to {npc_name} (Model {npc_model})!")
-    log(f"  Intro Dialogue: \"{intro_quote}\"")
-    return True
+        log(f"[PERSONA ACTIVATED] [{persona_info['title']}] assigned to {npc_name} (Model {npc_model})!")
+        log(f"  Intro Dialogue: \"{intro_quote}\"")
+        return True
+    except Exception as e:
+        log(f"[PERSONA ERROR] Failed to apply persona command: {e}")
+        return False
 
 def queue_say(text: str):
     global say_counter, pending_say
@@ -648,8 +652,11 @@ def main():
                     typed_text = ini.get_str("GAME", "text_cmd", "").strip()
                     if typed_text:
                         log(f"[IN-GAME TEXT COMMAND #{text_cmd_id}] Player typed: \"{typed_text}\"")
-                        if not apply_persona_command(typed_text):
-                            trigger_llm_prompt(typed_text)
+                        try:
+                            if not apply_persona_command(typed_text):
+                                trigger_llm_prompt(typed_text)
+                        except Exception as e:
+                            log(f"[TEXT CMD ERROR] Error processing in-game command: {e}")
 
                 # =========================================================
                 # 5. إرسال الحوارات والأوامر

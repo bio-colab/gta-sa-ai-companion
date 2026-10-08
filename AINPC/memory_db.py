@@ -26,12 +26,12 @@ class MemoryDB:
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                # جدول الشخصيات ومستوى العلاقة مع CJ
+                # جدول الشخصيات ومستوى العلاقة مع CJ (تم إزالة UNIQUE من name لتفادي أي أخطاء تطابق أسماء)
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS characters (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     model_id INTEGER,
-                    name TEXT UNIQUE,
+                    name TEXT,
                     archetype TEXT,
                     trust_score REAL DEFAULT 0.5,
                     bravery REAL DEFAULT 0.5,
@@ -42,6 +42,36 @@ class MemoryDB:
                     persona_custom TEXT DEFAULT ''
                 );
                 """)
+
+                # التحقق مما إذا كان الجدول القديم يحتوي على قيد UNIQUE وترقيته تلقائياً
+                cursor.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='characters';")
+                schema_row = cursor.fetchone()
+                if schema_row and "name TEXT UNIQUE" in (schema_row[0] or ""):
+                    try:
+                        cursor.execute("ALTER TABLE characters RENAME TO characters_old;")
+                        cursor.execute("""
+                        CREATE TABLE characters (
+                            id INTEGER PRIMARY KEY AUTOINCREMENT,
+                            model_id INTEGER,
+                            name TEXT,
+                            archetype TEXT,
+                            trust_score REAL DEFAULT 0.5,
+                            bravery REAL DEFAULT 0.5,
+                            times_recruited INTEGER DEFAULT 1,
+                            first_met TIMESTAMP,
+                            last_seen TIMESTAMP,
+                            persona TEXT DEFAULT '',
+                            persona_custom TEXT DEFAULT ''
+                        );
+                        """)
+                        cursor.execute("PRAGMA table_info(characters_old);")
+                        old_cols = [c[1] for c in cursor.fetchall()]
+                        common_cols = [c for c in ["id", "model_id", "name", "archetype", "trust_score", "bravery", "times_recruited", "first_met", "last_seen", "persona", "persona_custom"] if c in old_cols]
+                        cols_str = ", ".join(common_cols)
+                        cursor.execute(f"INSERT INTO characters ({cols_str}) SELECT {cols_str} FROM characters_old;")
+                        cursor.execute("DROP TABLE characters_old;")
+                    except Exception:
+                        pass
 
                 # التحقق من وجود الأعمدة الجديدة وترقية قاعدة البيانات القديمة تلقائياً
                 cursor.execute("PRAGMA table_info(characters);")
@@ -96,11 +126,22 @@ class MemoryDB:
                     updated["last_seen"] = now
                     return updated
                 else:
-                    cursor.execute("""
-                    INSERT INTO characters (model_id, name, archetype, trust_score, bravery, times_recruited, first_met, last_seen, persona, persona_custom)
-                    VALUES (?, ?, ?, 0.5, 0.5, 1, ?, ?, '', '')
-                    """, (model_id, name, archetype, now, now))
-                    conn.commit()
+                    try:
+                        cursor.execute("""
+                        INSERT INTO characters (model_id, name, archetype, trust_score, bravery, times_recruited, first_met, last_seen, persona, persona_custom)
+                        VALUES (?, ?, ?, 0.5, 0.5, 1, ?, ?, '', '')
+                        """, (model_id, name, archetype, now, now))
+                        conn.commit()
+                    except sqlite3.IntegrityError:
+                        # في حال وجود قيد قديم استثنائي، تفادي الانهيار وتحديد اسم مميز برقم الموديل
+                        unique_name = f"{name} #{model_id}"
+                        cursor.execute("""
+                        INSERT INTO characters (model_id, name, archetype, trust_score, bravery, times_recruited, first_met, last_seen, persona, persona_custom)
+                        VALUES (?, ?, ?, 0.5, 0.5, 1, ?, ?, '', '')
+                        """, (model_id, unique_name, archetype, now, now))
+                        conn.commit()
+                        name = unique_name
+
                     return {
                         "model_id": model_id,
                         "name": name,

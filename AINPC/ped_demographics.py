@@ -12,12 +12,22 @@ PEDS_IDE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # أسماء واقعية حسب الجنس والفئة العمرية
 MALE_NAMES = [
     "Marcus", "Darnell", "Eddie", "Tyrone", "Lamar", "Curtis", "Andre",
-    "Jamal", "Malik", "DeShawn", "Trey", "Anthony", "Darius", "Terrance"
+    "Jamal", "Malik", "DeShawn", "Trey", "Anthony", "Darius", "Terrance",
+    "Trevor", "Cedric", "Reggie", "Kendrick", "Devon", "Maurice", "Javier",
+    "Carlos", "Hector", "Mateo", "Luis", "Rico", "Miguel", "Angel", "Sal",
+    "Vito", "Tony", "Frankie", "Johnny", "Tommy", "Jimmy", "Bobby", "Wayne",
+    "Billy", "Earl", "Travis", "Cody", "Shane", "Dwight", "Hank", "Otis",
+    "Clarence", "Leroy", "Calvin", "Leon", "Russell"
 ]
 
 FEMALE_NAMES = [
     "Keesha", "Denise", "Latoya", "Shaniqua", "Monique", "Tasha", "Ebony",
-    "Vanessa", "Tamika", "Yolanda", "Alicia", "Mercedes", "Roxy", "Candy"
+    "Vanessa", "Tamika", "Yolanda", "Alicia", "Mercedes", "Roxy", "Candy",
+    "Krystal", "Jasmine", "Tiffany", "Destiny", "Chantel", "Brianna", "Maria",
+    "Elena", "Rosa", "Carmen", "Sofia", "Lucia", "Camila", "Isabella", "Catalina",
+    "Donna", "Gina", "Bianca", "Angela", "Tina", "Amber", "Heather", "Crystal",
+    "Brittany", "Ashley", "Samantha", "Brenda", "Loretta", "Patsy", "Darlene",
+    "Shelly", "Peggy", "Wanda", "Bernice", "Betty", "Ruby"
 ]
 
 ELDERLY_MALE_NAMES = [
