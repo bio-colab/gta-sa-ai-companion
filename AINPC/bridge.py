@@ -9,6 +9,7 @@ import time
 import queue
 import threading
 from datetime import datetime
+import psutil
 from llm_brain import LLMBrain
 from voice_stt import VoiceSTT
 from ped_demographics import resolve_persona_input, CORE_PERSONAS
@@ -19,6 +20,17 @@ if sys.platform == "win32":
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+
+def is_gta_running() -> bool:
+    """فحص ما إذا كانت عملية لعبة GTA San Andreas مشغلة حالياً لمنع قراءة بيانات قديمة"""
+    try:
+        for p in psutil.process_iter(['name']):
+            p_name = p.info.get('name')
+            if p_name and p_name.lower() in ['gta_sa.exe', 'gta-sa.exe', 'gta_sa']:
+                return True
+    except Exception:
+        pass
+    return False
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INI_PATH = os.path.join(BASE_DIR, "cleo", "ainpc_bridge.ini")
@@ -193,6 +205,42 @@ class SafeIniManager:
                 return True
             except (PermissionError, OSError):
                 time.sleep(0.01)
+            except Exception:
+                time.sleep(0.01)
+        return False
+
+    def reset_game_section(self) -> bool:
+        """تصفير قسم GAME بالكامل لمنع قراءة بيانات شبحية قديمة من جلسات سابقة"""
+        for _ in range(5):
+            try:
+                bridge_lines = ["[BRIDGE]\n"]
+                if os.path.exists(self.path):
+                    with open(self.path, "r", encoding="utf-8", errors="replace") as f:
+                        lines = f.readlines()
+                    in_bridge = False
+                    for line in lines:
+                        stripped = line.strip()
+                        if stripped.upper() == "[BRIDGE]":
+                            in_bridge = True
+                            continue
+                        elif stripped.startswith("[") and stripped.endswith("]"):
+                            in_bridge = False
+                        if in_bridge and "=" in stripped:
+                            bridge_lines.append(line)
+
+                default_game_lines = [
+                    "\n[GAME]\n",
+                    "status = offline\n",
+                    "pong = 0\n",
+                    "npc_active = 0\n",
+                    "say_ack = 0\n",
+                    "action_ack = 0\n",
+                    "text_cmd_id = 0\n"
+                ]
+                with open(self.path, "w", encoding="utf-8") as f:
+                    f.writelines(bridge_lines + default_game_lines)
+                self.reload()
+                return True
             except Exception:
                 time.sleep(0.01)
         return False
@@ -548,13 +596,28 @@ def main():
     input_t = threading.Thread(target=input_thread_func, daemon=True)
     input_t.start()
 
-    # كتابة التهيئة الأولية للجسر
+    # تنظيف أي حالة سابقة في ملف الجسر لتفادي أي بيانات شبحية من جلسات قديمة
+    gta_active = is_gta_running()
+    if not gta_active:
+        log("[BRIDGE] Initialized in STANDBY mode. Waiting for GTA San Andreas (gta_sa.exe) to start...")
+        ini.reset_game_section()
+    else:
+        log("[BRIDGE] GTA San Andreas process detected running. Initializing handshake...")
+
+    bridge_state["status"] = "connecting" if gta_active else "standby"
+    bridge_state["ping"] = "0"
+    bridge_state["say_id"] = "0"
+    bridge_state["say_text"] = ""
+    bridge_state["action_id"] = "0"
+    bridge_state["action_cmd"] = ""
+    bridge_state["active_mode"] = "companion"
+    bridge_state["active_persona"] = ""
     ini.update_bridge_section(bridge_state)
-    log("[BRIDGE] Initialized. Hold Key 'T' to speak, press Key '~' (or F6) in GTA to type, or type message here...")
+    log("[BRIDGE] Instructions: Hold Key 'T' to speak, press Key '~' (or F6) in GTA to type, or type message here...")
 
     handshake_established = False
     welcome_sent = False
-    ping_counter = 1
+    ping_counter = 0
     last_ping_time = time.time()
     last_successful_pong_time = time.time()
     last_telemetry_print_time = 0
@@ -586,34 +649,60 @@ def main():
         while True:
             time.sleep(0.08) # 80ms استقصاء سريع
 
+            now = time.time()
+
+            # 1. التحقق من وجود عملية اللعبة الحقيقية لمنع قراءة بيانات قديمة
+            gta_alive = is_gta_running()
+            if not gta_alive:
+                if handshake_established:
+                    handshake_established = False
+                    welcome_sent = False
+                    ping_counter = 0
+                    brain.reset_session()
+                    log("--------------------------------------------------------------------")
+                    log("[GAME CLOSED] GTA San Andreas process closed. Returning to standby...")
+                    log("[BRIDGE] Waiting for game to relaunch...")
+                    log("--------------------------------------------------------------------")
+                    bridge_state["status"] = "standby"
+                    bridge_state["ping"] = "0"
+                    ini.update_bridge_section(bridge_state)
+                    ini.reset_game_section()
+                time.sleep(1.0)
+                continue
+
             if not ini.reload() or not ini.has_section("GAME"):
                 continue
 
             game_status = ini.get_str("GAME", "status", "offline")
             game_pong = ini.get_int("GAME", "pong", 0)
-            now = time.time()
 
-            # 1. المصافحة
-            # 1. المصافحة
+            # 2. المصافحة الحية المؤكدة برقم النبضة المتطابق (Real-Time Ping/Pong Matching)
             if not handshake_established:
-                if game_pong > 0:
+                if ping_counter == 0 or (now - last_ping_time > 2.0):
+                    ping_counter += 1
+                    last_ping_time = now
+                    bridge_state["status"] = "connecting"
+                    bridge_state["ping"] = str(ping_counter)
+                    ini.update_bridge_section(bridge_state)
+
+                if game_pong == ping_counter and game_pong > 0:
                     handshake_established = True
                     last_successful_pong_time = now
                     rtt_ms = (now - last_ping_time) * 1000
                     log("====================================================================")
                     log(f"  [SUCCESS] HANDSHAKE LINKED! (Game Status: {game_status} | Latency: {rtt_ms:.1f}ms)")
                     log("====================================================================")
-                    last_ping_time = now
-
                     if not welcome_sent:
                         welcome_sent = True
                         queue_say("~y~AI NPC:~w~ Brain online! Hold T to speak, or press F6 to type.")
                         queue_action("look_at_player")
+                continue
             else:
-                if game_pong > 0:
+                # 3. فحص الـ Pong النشط ومطابقته
+                if game_pong == ping_counter:
                     last_successful_pong_time = now
 
-                # 2. نبض الاتصال الدوري كل ثانية
+                # نبض الاتصال الدوري كل ثانية
                 if now - last_ping_time > 1.0:
                     last_ping_time = now
                     ping_counter += 1
@@ -621,15 +710,15 @@ def main():
                     bridge_state["ping"] = str(ping_counter)
                     ini.update_bridge_section(bridge_state)
 
-                # 3. كاشف انقطاع الاتصال (25 ثانية مهلة مرنة جداً لمنع الانقطاع عند التوقف أو التصوير)
-                if now - last_successful_pong_time > 25.0:
+                # كاشف تشنج اللعبة أو التوقف الطويل (مهلة 20 ثانية)
+                if now - last_successful_pong_time > 20.0:
                     log("--------------------------------------------------------------------")
-                    log("[DISCONNECTED] Game stopped responding (Exit/Paused).")
-                    log("[BRIDGE] Returning to standby. Waiting for game to reconnect...")
+                    log("[DISCONNECTED] Game stopped responding to heartbeat pings.")
+                    log("[BRIDGE] Returning to standby. Waiting for game response...")
                     log("--------------------------------------------------------------------")
                     handshake_established = False
                     welcome_sent = False
-                    ping_counter = 1
+                    ping_counter = 0
                     last_ping_time = now
                     continue
 

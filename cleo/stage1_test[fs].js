@@ -355,6 +355,12 @@ function playNpcAnimation(ped, animName, ifpName, loop, durationMs) {
     return false;
 }
 
+try {
+    IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
+    IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
+    IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
+} catch (_) {}
+
 while (true) {
     wait(50);
 
