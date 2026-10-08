@@ -92,7 +92,7 @@ The NPC possesses procedural demographic identity, persistent episodic memory, l
 
 ### 1. Clone the Repository
 ```bash
-git clone https://github.com/yourusername/gta-sa-ai-companion.git
+git clone https://github.com/bio-colab/gta-sa-ai-companion.git
 cd gta-sa-ai-companion
 ```
 

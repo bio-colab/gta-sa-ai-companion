@@ -25,10 +25,10 @@ You don't need to know everything about GTA modding to contribute. Here are area
 
 ## 🛠️ Development Setup
 
-1. **Fork the Repository**:
-   Fork the repository to your GitHub account and clone it locally:
+1. **Clone or Fork the Repository**:
+   Clone the repository directly, or fork it to your GitHub account:
    ```bash
-   git clone https://github.com/YOUR_USERNAME/gta-sa-ai-companion.git
+   git clone https://github.com/bio-colab/gta-sa-ai-companion.git
    cd gta-sa-ai-companion
    ```
 

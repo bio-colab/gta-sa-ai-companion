@@ -61,7 +61,7 @@
 
 ### 1. تنزيل المشروع
 ```bash
-git clone https://github.com/yourusername/gta-sa-ai-companion.git
+git clone https://github.com/bio-colab/gta-sa-ai-companion.git
 cd gta-sa-ai-companion
 ```
 

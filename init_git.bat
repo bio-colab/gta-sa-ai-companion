@@ -11,8 +11,8 @@ echo.
 echo ====================================================================
 echo Repository initialized successfully!
 echo.
-echo Next step: Create a new repository on GitHub (without README), then run:
-echo   git remote add origin https://github.com/YOUR_USERNAME/YOUR_REPO_NAME.git
+echo Next step: To push to GitHub, run:
+echo   git remote add origin https://github.com/bio-colab/gta-sa-ai-companion.git
 echo   git push -u origin main
 echo ====================================================================
 pause
