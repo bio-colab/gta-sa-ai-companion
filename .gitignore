@@ -1,0 +1,54 @@
+# Python virtual environments & bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+
+# Sensitive API Keys & User Config (CRITICAL: Never commit real keys)
+.env
+AINPC/.env
+*.env.local
+
+# SQLite Database & Runtime memory
+memory.db
+AINPC/memory.db
+*.sqlite
+*.sqlite3
+*.db-journal
+
+# Temporary logs & test artifacts
+*.log
+cleo_redux.log
+scratch/
+tests/scratch/
+test_*.py
+
+# Operating system files
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# IDE & Editor settings
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+
+# Ignore GTA San Andreas base game binaries & assets if used in-place
+gta_sa.exe
+*.dll
+*.asi
+audio/
+models/
+data/
+anim/
+text/
+movies/
+ReadMe/
+CLEO/CLEO_PLUGINS/
+CLEO/*.fxt
+CLEO/*.ide
+CLEO/*.zon
+CLEO/*.cleo
