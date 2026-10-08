@@ -11,6 +11,7 @@ import threading
 from datetime import datetime
 from llm_brain import LLMBrain
 from voice_stt import VoiceSTT
+from ped_demographics import resolve_persona_input, CORE_PERSONAS
 
 # توافق مع Windows Console
 if sys.platform == "win32":
@@ -214,7 +215,8 @@ bridge_state = {
     "say_text": "",
     "action_id": "0",
     "action_cmd": "",
-    "active_mode": "companion"
+    "active_mode": "companion",
+    "active_persona": "companion"
 }
 
 llm_queue = queue.Queue()
@@ -238,6 +240,32 @@ def set_active_mode(new_mode: str) -> bool:
         log(f"[MODE SWITCH] Active mode set to: [{new_mode.upper()}]")
         return True
     return False
+
+def apply_persona_command(user_text: str) -> bool:
+    """معالجة وتطبيق أوامر تخصيص الشخصية ونظام الـ System Instructions الخاص بالـ NPC"""
+    persona_info = resolve_persona_input(user_text)
+    if not persona_info:
+        return False
+
+    npc_model = latest_game_context.get("npc_model", 107) if latest_game_context else 107
+    identity = brain.get_or_create_identity(npc_model)
+    npc_name = identity.get("name", "Companion")
+
+    # تحديث وتخزين الشخصية في مخ الذكاء الاصطناعي وقاعدة البيانات الدائمة SQLite
+    intro_quote = brain.set_custom_persona(npc_model, persona_info)
+
+    p_type = persona_info.get("type", "custom")
+    bridge_state["active_persona"] = p_type
+    ini.update_bridge_section(bridge_state)
+
+    # إرسال إشعار للشاشة وتفعيل قدرات السكريبت فوراً
+    queue_say(f"{persona_info['gta_subtitle']}~n~~y~{npc_name}:~w~ {intro_quote}")
+    if persona_info.get("action"):
+        queue_action(persona_info["action"])
+
+    log(f"[PERSONA ACTIVATED] [{persona_info['title']}] assigned to {npc_name} (Model {npc_model})!")
+    log(f"  Intro Dialogue: \"{intro_quote}\"")
+    return True
 
 def queue_say(text: str):
     global say_counter, pending_say
@@ -392,6 +420,14 @@ def input_thread_func():
                 print(f"\n[LAYERED ARCHITECTURE] Active Layer/Mode: [{cur_m}]", flush=True)
                 print("  Available Modes: companion | combat | vehicle | emote", flush=True)
                 print("  Switch mode by typing: mode <name> (e.g. 'mode emote', 'mode combat')\n", flush=True)
+            elif text in ["persona", "role"]:
+                cur_p = bridge_state.get("active_persona", "companion").upper()
+                print(f"\n[PERSONA SYSTEM] Active Persona: [{cur_p}]", flush=True)
+                print("  Core Archetypes: hitman | medic | heavy | driver | girlfriend", flush=True)
+                print("  Assign in-game or console via: /persona <role> (e.g. '/persona hitman', '/persona medic')", flush=True)
+                print("  Or custom free-form instruction: /persona You are a loyal Russian bodyguard...\n", flush=True)
+            elif apply_persona_command(text):
+                continue
             elif text.startswith("mode "):
                 target_m = text[5:].strip().lower()
                 if target_m in ["social", "chill", "dance", "feelings"]:
@@ -483,7 +519,7 @@ def input_thread_func():
             break
 
 def main():
-    global pending_say, pending_action, latest_game_context, bridge_state
+    global pending_say, pending_action, latest_game_context, bridge_state, say_counter, action_counter
 
     log("====================================================================")
     log("   GTA San Andreas AI NPC - Bridge (Phase 2.5 Voice-In / Text-Out)  ")
@@ -501,7 +537,7 @@ def main():
 
     # كتابة التهيئة الأولية للجسر
     ini.update_bridge_section(bridge_state)
-    log("[BRIDGE] Initialized. Hold Key 'T' or 'V' in GTA SA to talk, or type message here...")
+    log("[BRIDGE] Initialized. Hold Key 'T' to speak, press Key '~' (or F6) in GTA to type, or type message here...")
 
     handshake_established = False
     welcome_sent = False
@@ -511,8 +547,12 @@ def main():
     last_telemetry_print_time = 0
     last_telemetry_snapshot = ""
 
-    last_seen_say_ack = 0
-    last_seen_action_ack = 0
+    ini.reload()
+    say_counter = max(say_counter, ini.get_int("GAME", "say_ack", 0), ini.get_int("BRIDGE", "say_id", 0))
+    action_counter = max(action_counter, ini.get_int("GAME", "action_ack", 0), ini.get_int("BRIDGE", "action_id", 0))
+    last_seen_say_ack = ini.get_int("GAME", "say_ack", 0)
+    last_seen_action_ack = ini.get_int("GAME", "action_ack", 0)
+    last_seen_text_cmd_id = ini.get_int("GAME", "text_cmd_id", 0)
 
     # حالات سابقة لاكتشاف الأحداث
     prev_cj_weapon = None
@@ -541,8 +581,9 @@ def main():
             now = time.time()
 
             # 1. المصافحة
+            # 1. المصافحة
             if not handshake_established:
-                if game_pong >= ping_counter:
+                if game_pong > 0:
                     handshake_established = True
                     last_successful_pong_time = now
                     rtt_ms = (now - last_ping_time) * 1000
@@ -553,10 +594,10 @@ def main():
 
                     if not welcome_sent:
                         welcome_sent = True
-                        queue_say("~y~AI NPC:~w~ Voice & Brain online, CJ! Hold T to speak.")
+                        queue_say("~y~AI NPC:~w~ Brain online! Hold T to speak, or press F6 to type.")
                         queue_action("look_at_player")
             else:
-                if game_pong >= ping_counter:
+                if game_pong > 0:
                     last_successful_pong_time = now
 
                 # 2. نبض الاتصال الدوري كل ثانية
@@ -567,8 +608,8 @@ def main():
                     bridge_state["ping"] = str(ping_counter)
                     ini.update_bridge_section(bridge_state)
 
-                # 3. كاشف انقطاع الاتصال
-                if now - last_successful_pong_time > 3.0:
+                # 3. كاشف انقطاع الاتصال (25 ثانية مهلة مرنة جداً لمنع الانقطاع عند التوقف أو التصوير)
+                if now - last_successful_pong_time > 25.0:
                     log("--------------------------------------------------------------------")
                     log("[DISCONNECTED] Game stopped responding (Exit/Paused).")
                     log("[BRIDGE] Returning to standby. Waiting for game to reconnect...")
@@ -597,6 +638,18 @@ def main():
                             log("[VOICE] Audio too brief or no speech detected.")
                     threading.Thread(target=async_transcribe, daemon=True).start()
                 prev_ptt_active = ptt_active
+
+                # =========================================================
+                # 4.2 استلام أوامر شريط الكتابة داخل اللعبة (In-Game Text Bar)
+                # =========================================================
+                text_cmd_id = ini.get_int("GAME", "text_cmd_id", 0)
+                if text_cmd_id != last_seen_text_cmd_id and text_cmd_id > 0:
+                    last_seen_text_cmd_id = text_cmd_id
+                    typed_text = ini.get_str("GAME", "text_cmd", "").strip()
+                    if typed_text:
+                        log(f"[IN-GAME TEXT COMMAND #{text_cmd_id}] Player typed: \"{typed_text}\"")
+                        if not apply_persona_command(typed_text):
+                            trigger_llm_prompt(typed_text)
 
                 # =========================================================
                 # 5. إرسال الحوارات والأوامر
@@ -692,57 +745,25 @@ def main():
                         "npc_weapon_name": npc_weapon_name
                     }
 
-                    # محرك كشف الأحداث التلقائي
+                    # محرك كشف الأحداث الذكي والمحمي من استنزاف الـ API
                     if npc_active == 1:
                         if prev_npc_active == 0:
+                            # تحية التجنيد الأولى فقط ترسل إلى الذكاء الاصطناعي
                             trigger_llm_event(latest_game_context, f"I just joined CJ as a companion here in {zone_name}!")
-                        elif car_crashed == 1 and (now - last_crash_comment_time > 4.0):
-                            last_crash_comment_time = now
-                            trigger_llm_event(latest_game_context, f"Violent car collision! CJ smashed the car hard (Impact Damage: {crash_severity} HP)! Scream, panic, or complain angrily about his crazy driving!")
                         elif threat_active == 1 and prev_threat_active == 0:
-                            if cj_in_car and npc_in_car:
-                                if brain.current_mode != "combat":
-                                    set_active_mode("combat")
-                                trigger_llm_event(latest_game_context, "Drive-by combat initiated! Hostiles or police are attacking our car! Companion is firing out the window!")
-                            else:
-                                if brain.current_mode != "combat":
-                                    set_active_mode("combat")
-                                trigger_llm_event(latest_game_context, "Hostiles or police opened fire! Companion is engaging in combat to defend CJ!")
+                            # تبديل المود إلى القتال محلياً دون استهلاك الـ API
+                            if brain.current_mode != "combat":
+                                set_active_mode("combat")
+                            log("[LOCAL TACTICS] Hostile threat engaged by squad locally (0 API Calls).")
                         elif threat_active == 0 and prev_threat_active == 1:
-                            trigger_llm_event(latest_game_context, "Threat eliminated! The attackers have been neutralized. We survived the fight!")
-                        elif cj_in_car and prev_car_radio is not None and car_radio != prev_car_radio:
-                            if car_radio in RADIO_STATIONS and car_radio not in [-1, 12]:
-                                if now - last_radio_comment_time > 15.0:
-                                    last_radio_comment_time = now
-                                    st_info = RADIO_STATIONS[car_radio]
-                                    trigger_llm_event(latest_game_context, f"CJ tuned the car radio to {st_info['name']} ({st_info['genre']}). Comment on the station or music vibe!")
-                            elif car_radio in [-1, 12] and prev_car_radio not in [-1, 12]:
-                                if now - last_radio_comment_time > 20.0:
-                                    last_radio_comment_time = now
-                                    trigger_llm_event(latest_game_context, "CJ turned off the car radio. Driving in total silence.")
-                        elif prev_cj_wanted is not None and cj_wanted > prev_cj_wanted and cj_wanted > 0:
+                            log("[LOCAL TACTICS] Threat neutralized by squad locally (0 API Calls).")
+                        elif car_crashed == 1 and (now - last_crash_comment_time > 10.0):
+                            last_crash_comment_time = now
+                            log(f"[LOCAL EVENT] Car collision detected (Damage: {crash_severity} HP).")
+                        elif prev_cj_wanted is not None and cj_wanted > prev_cj_wanted and cj_wanted >= 2:
                             if brain.current_mode == "emote":
                                 set_active_mode("combat")
-                            trigger_llm_event(latest_game_context, f"Police alert! Wanted level increased to {cj_wanted} stars!")
-                        elif prev_cj_wanted is not None and prev_cj_wanted > 0 and cj_wanted == 0:
-                            trigger_llm_event(latest_game_context, f"We lost the heat! We escaped the police in {zone_name}!")
-                        elif prev_cj_weapon is not None and cj_weapon != prev_cj_weapon and cj_weapon in HEAVY_WEAPONS:
-                            trigger_llm_event(latest_game_context, f"CJ just equipped a dangerous heavy weapon: {weapon_name}!")
-                        elif prev_cj_in_car is not None and cj_in_car == 1 and prev_cj_in_car == 0:
-                            trigger_llm_event(latest_game_context, f"CJ got into a car. Rolling with him.")
-                        elif prev_cj_in_car is not None and cj_in_car == 0 and prev_cj_in_car == 1:
-                            trigger_llm_event(latest_game_context, f"CJ hopped out of the vehicle on foot.")
-                        elif prev_cj_health is not None and (cj_health < prev_cj_health - 20 or (cj_health < 35 and prev_cj_health >= 35)):
-                            trigger_llm_event(latest_game_context, f"CJ is bleeding and taking heavy damage! Health dropped to {cj_health}%.")
-                        elif now - last_ambient_comment_time > 80.0:
-                            cur_period = get_time_period(clock_hour)
-                            if prev_hour_period is not None and cur_period != prev_hour_period and cur_period in ["Sunset / Dusk", "Midnight / Late Night", "Dawn"]:
-                                last_ambient_comment_time = now
-                                trigger_llm_event(latest_game_context, f"Atmospheric shift: It is now {cur_period} ({clock_hour:02d}:{clock_min:02d}) in San Andreas. Make a brief atmospheric comment.")
-                            elif prev_weather_id is not None and weather_id != prev_weather_id and weather_id in [8, 9, 16, 19]:
-                                last_ambient_comment_time = now
-                                w_name = WEATHER_NAMES.get(weather_id, "stormy")
-                                trigger_llm_event(latest_game_context, f"Weather shift: It is now {w_name}. Remark on the changing weather conditions.")
+                            log(f"[LOCAL TACTICS] Police alert level raised to {cj_wanted} stars.")
 
                     prev_cj_weapon = cj_weapon
                     prev_cj_wanted = cj_wanted

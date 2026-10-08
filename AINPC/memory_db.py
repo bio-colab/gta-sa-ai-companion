@@ -37,9 +37,25 @@ class MemoryDB:
                     bravery REAL DEFAULT 0.5,
                     times_recruited INTEGER DEFAULT 1,
                     first_met TIMESTAMP,
-                    last_seen TIMESTAMP
+                    last_seen TIMESTAMP,
+                    persona TEXT DEFAULT '',
+                    persona_custom TEXT DEFAULT ''
                 );
                 """)
+
+                # التحقق من وجود الأعمدة الجديدة وترقية قاعدة البيانات القديمة تلقائياً
+                cursor.execute("PRAGMA table_info(characters);")
+                existing_cols = [col[1] for col in cursor.fetchall()]
+                if "persona" not in existing_cols:
+                    try:
+                        cursor.execute("ALTER TABLE characters ADD COLUMN persona TEXT DEFAULT '';")
+                    except Exception:
+                        pass
+                if "persona_custom" not in existing_cols:
+                    try:
+                        cursor.execute("ALTER TABLE characters ADD COLUMN persona_custom TEXT DEFAULT '';")
+                    except Exception:
+                        pass
 
                 # جدول الذكريات والأحداث المشتركة
                 cursor.execute("""
@@ -57,27 +73,32 @@ class MemoryDB:
                 conn.commit()
 
     def get_or_register_character(self, model_id: int, name: str, archetype: str) -> Dict[str, Any]:
-        """استرجاع شخصية مسجلة أو إنشاؤها إذا كانت أول مرة يلتقي بها CJ"""
+        """استرجاع شخصية مسجلة بـ model_id أو إنشاؤها إذا كانت أول مرة يلتقي بها CJ"""
         now = datetime.now().isoformat()
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM characters WHERE name = ?", (name,))
+                # البحث الثابت بـ model_id لضمان استمرارية الذاكرة عبر الجلسات
+                cursor.execute("SELECT * FROM characters WHERE model_id = ?", (model_id,))
                 row = cursor.fetchone()
 
                 if row:
-                    # تحديث تاريخ آخر ظهور وعدد مرات التجنيد
+                    # تحديث تاريخ آخر ظهور وعدد مرات التجنيد للشخصية الدائمة
+                    new_recruits = row["times_recruited"] + 1
                     cursor.execute("""
                     UPDATE characters 
-                    SET last_seen = ?, times_recruited = times_recruited + 1 
-                    WHERE name = ?
-                    """, (now, name))
+                    SET last_seen = ?, times_recruited = ? 
+                    WHERE id = ?
+                    """, (now, new_recruits, row["id"]))
                     conn.commit()
-                    return dict(row)
+                    updated = dict(row)
+                    updated["times_recruited"] = new_recruits
+                    updated["last_seen"] = now
+                    return updated
                 else:
                     cursor.execute("""
-                    INSERT INTO characters (model_id, name, archetype, trust_score, bravery, times_recruited, first_met, last_seen)
-                    VALUES (?, ?, ?, 0.5, 0.5, 1, ?, ?)
+                    INSERT INTO characters (model_id, name, archetype, trust_score, bravery, times_recruited, first_met, last_seen, persona, persona_custom)
+                    VALUES (?, ?, ?, 0.5, 0.5, 1, ?, ?, '', '')
                     """, (model_id, name, archetype, now, now))
                     conn.commit()
                     return {
@@ -88,8 +109,34 @@ class MemoryDB:
                         "bravery": 0.5,
                         "times_recruited": 1,
                         "first_met": now,
-                        "last_seen": now
+                        "last_seen": now,
+                        "persona": "",
+                        "persona_custom": ""
                     }
+
+    def update_character_persona(self, model_id: int, persona: str, persona_custom: str = "") -> bool:
+        """تحديث وحفظ شخصية الـ NPC ودوره المحدد بشكل دائم في قاعدة البيانات"""
+        with self.lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                UPDATE characters 
+                SET persona = ?, persona_custom = ? 
+                WHERE model_id = ?
+                """, (persona, persona_custom, model_id))
+                conn.commit()
+                return cursor.rowcount > 0
+
+    def get_character_persona(self, model_id: int) -> Dict[str, str]:
+        """استرجاع الشخصية المحفوظة للـ NPC بناءً على الموديل"""
+        with self.lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT persona, persona_custom FROM characters WHERE model_id = ?", (model_id,))
+                row = cursor.fetchone()
+                if row:
+                    return {"persona": row["persona"] or "", "persona_custom": row["persona_custom"] or ""}
+                return {"persona": "", "persona_custom": ""}
 
     def record_memory(self, character_name: str, event_type: str, description: str, zone: str, emotional_impact: float = 0.0):
         """تسجيل ذكرى أو موقف مشترك بين CJ والـ NPC مع أثره العاطفي"""
@@ -102,13 +149,13 @@ class MemoryDB:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, (character_name, event_type, description, zone, now, emotional_impact))
 
-                # تحديث مقياس الثقة (Trust Score) تدريجياً بناءً على الأثر العاطفي
+                # تحديث مقياس الثقة (Trust Score) تدريجياً وبشكل ملموس بناءً على الأثر العاطفي
                 if emotional_impact != 0.0:
                     cursor.execute("""
                     UPDATE characters
                     SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?))
                     WHERE name = ?
-                    """, (emotional_impact * 0.1, character_name))
+                    """, (emotional_impact, character_name))
 
                 conn.commit()
 

@@ -75,6 +75,12 @@ class VoiceSTT:
         if duration_sec < 0.4:
             return ("", 0.0)
 
+        # حماية ضد الصمت الرقمي وهلوسات Whisper (مثل Thank you المتكررة)
+        max_amplitude = int(np.max(np.abs(audio_data)))
+        if max_amplitude < 400:
+            print(f"[STT Silence Guard] Microphone signal too weak/muted (Max Amp: {max_amplitude} < 400). Check mic mute/F4 key!", flush=True)
+            return ("", 0.0)
+
         # تحويل المقاطع إلى ملف WAV في الذاكرة Ram فقط
         wav_buf = io.BytesIO()
         with wave.open(wav_buf, "wb") as wf:

@@ -15,9 +15,9 @@ try:
 except ImportError:
     from memory_db import MemoryDB
 try:
-    from AINPC.ped_demographics import PedDemographicsEngine
+    from AINPC.ped_demographics import PedDemographicsEngine, CORE_PERSONAS, resolve_persona_input
 except ImportError:
-    from ped_demographics import PedDemographicsEngine
+    from ped_demographics import PedDemographicsEngine, CORE_PERSONAS, resolve_persona_input
 
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
@@ -39,13 +39,13 @@ MODE_ACTIONS = {
         "follow_player", "look_at_player", "face_player", "heal", "attack_threat", "none"
     ],
     "combat": [
-        "arm_rifle", "arm_pistol", "arm_smg", "arm_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
+        "arm_rifle", "arm_pistol", "arm_smg", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
     ],
     "vehicle": [
         "fetch_car", "drive_wander", "drive_to_target", "driveby", "exit_car", "follow_player", "none"
     ],
     "emote": [
-        "dance", "flirt", "act_drunk", "sober_up", "gang_sign", "smoke", "cheer", "cower", "follow_player", "none"
+        "dance", "flirt", "kiss", "strip", "lapdance", "cuddle", "act_drunk", "sober_up", "gang_sign", "smoke", "cheer", "cower", "follow_player", "none"
     ]
 }
 
@@ -60,6 +60,7 @@ class LLMBrain:
         self.db = MemoryDB()
         self.demographics_engine = PedDemographicsEngine()
         self.current_mode = "companion"
+        self.current_persona = None
 
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_key.startswith("gsk_"))
@@ -80,6 +81,24 @@ class LLMBrain:
         # تسجيل أو استرجاع سجل الشخصية من قاعدة البيانات
         char_record = self.db.get_or_register_character(model_id, name, archetype)
 
+        # استرجاع وتطبيق الشخصية المحفوظة (Persona) إن وجدت
+        saved_persona = char_record.get("persona", "")
+        saved_custom = char_record.get("persona_custom", "")
+        if saved_persona:
+            if saved_persona in CORE_PERSONAS:
+                self.current_persona = dict(CORE_PERSONAS[saved_persona])
+            else:
+                self.current_persona = {
+                    "type": "custom",
+                    "title": "Custom Unique Persona",
+                    "role": "Custom Persona",
+                    "action": "persona_custom",
+                    "guidelines": f"Custom player instructions: {saved_custom or saved_persona}",
+                    "custom_text": saved_custom or saved_persona,
+                    "intro_quote": "Understood CJ. I know my role.",
+                    "gta_subtitle": "~y~[PERSONA: CUSTOM]~w~ Custom Personality Active!"
+                }
+
         self.current_identity = {
             "name": name,
             "gender": gender,
@@ -92,6 +111,18 @@ class LLMBrain:
             "times_recruited": char_record.get("times_recruited", 1)
         }
         return self.current_identity
+
+    def set_custom_persona(self, model_id: int, persona_data: Dict[str, Any]) -> str:
+        """تحديث وحفظ شخصية الـ NPC وتوجيهاته بشكل فوري ودائم"""
+        self.current_persona = persona_data
+        p_type = persona_data.get("type", "custom")
+        c_text = persona_data.get("custom_text", "")
+        self.db.update_character_persona(model_id, p_type, c_text)
+
+        # تسجيل الموقف في قاعدة الذكريات الدائمة
+        name = self.current_identity["name"] if self.current_identity else "Companion"
+        self.db.record_memory(name, "persona_change", f"CJ assigned me the role: {persona_data['title']}", "San Andreas", emotional_impact=0.15)
+        return persona_data.get("intro_quote", "Ready CJ.")
 
     def generate_response(self, context: Dict[str, Any], trigger_type: str, user_prompt: Optional[str] = None) -> Tuple[str, str, str]:
         """
@@ -112,23 +143,26 @@ class LLMBrain:
         # فحص إشارات تبديل المود التلقائية من كلام اللاعب
         prompt_lower = (user_prompt or "").lower()
         if any(k in prompt_lower for k in [
+            "ارقص", "رقص", "دانس", "dance", "دخن", "تدخين", "smoke", "سكر", "سكران", "drunk", "تغزل", "flirt", "صفق", "تصفيق", "cheer",
             "مود المشاعر", "وضع المشاعر", "مود الرقص", "وضع الرقص", "مود السكر", "فعّل المشاعر",
             "emote mode", "social mode", "chill mode", "dance mode", "party mode", "activate emote", "switch to emote"
-        ]) or (any(k in prompt_lower for k in ["مود", "وضع", "mode", "activate", "switch", "فعّل", "ادخل"]) and any(k in prompt_lower for k in ["مشاعر", "رقص", "سكر", "غزل", "تدخين", "dance", "drunk", "emote", "flirt", "smoke"])):
+        ]):
             self.current_mode = "emote"
         elif any(k in prompt_lower for k in [
-            "مود القتال", "وضع القتال", "استعد للحرب", "سلاح", "اسلحة", "جهّز السلاح", "حرب", "درايف باي", "اطلق النار", "اطلق من النافذة",
-            "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "shoot out", "open fire"
+            "سلاح", "اسلحة", "مسدس", "رشاش", "بندقية", "شوتجن", "قاتل", "احميني", "احمي", "اطلق", "حرب", "درايف باي", "دافع",
+            "مود القتال", "وضع القتال", "استعد للحرب", "جهّز السلاح", "اطلق النار", "اطلق من النافذة",
+            "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "shoot out", "open fire", "gun", "weapon", "shoot", "fight", "protect", "kill"
         ]):
             self.current_mode = "combat"
         elif any(k in prompt_lower for k in [
-            "مود القيادة", "وضع القيادة", "جلب السيارة", "سوق", "قد السيارة", "اركب السيارة",
-            "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive me"
+            "سيارة", "السيارة", "جيب سيارة", "احضر سيارة", "سرق سيارة", "سوق", "قد السيارة", "اركب السيارة", "اركبي", "انزل من السيارة",
+            "مود القيادة", "وضع القيادة", "جلب السيارة",
+            "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive me", "car", "drive", "exit car"
         ]):
             self.current_mode = "vehicle"
         elif any(k in prompt_lower for k in [
-            "الوضع العادي", "مود المرافقة", "اتبعني", "قف", "إلغاء", "توقف", "تعال", "ارجع",
-            "normal mode", "companion mode", "follow me", "stop", "cancel", "regroup", "come back"
+            "الوضع العادي", "مود المرافقة", "اتبعني", "الحقني", "تعال", "ارجع", "قف", "توقف", "اثبت", "إلغاء",
+            "normal mode", "companion mode", "follow me", "follow", "stop", "cancel", "regroup", "come back", "wait", "stay"
         ]):
             self.current_mode = "companion"
 
@@ -171,28 +205,45 @@ class LLMBrain:
             f"Your Health: {npc_health}% | Your Weapon: {npc_weapon_name} | Distance to CJ: {npc_dist:.1f}m"
         )
 
+        persona_block = ""
+        if self.current_persona:
+            p_title = self.current_persona.get("title", "Custom Persona")
+            p_guide = self.current_persona.get("guidelines", "")
+            persona_block = (
+                f"\nACTIVE ASSIGNED PERSONA & ROLE: [{p_title.upper()}]\n"
+                f"- Persona Directives: {p_guide}\n"
+                f"- MANDATORY ROLEPLAY RULE: You MUST stay completely true to this persona! "
+                f"Your morality, language, aggressiveness, and decision-making MUST reflect this role.\n"
+            )
+
         system_prompt = (
             f"You are an autonomous AI companion ped in Grand Theft Auto: San Andreas following Carl Johnson (CJ).\n"
             f"YOUR IDENTITY & DEMOGRAPHICS:\n"
             f"- Your name is: {npc_name}\n"
             f"- Gender: {npc_gender.capitalize()} | Age: {npc_age.capitalize()} | Role: {npc_role} (Ped Model #{npc_model})\n"
             f"- Personality Guidelines: {npc_guidelines}\n"
+            f"{persona_block}"
             f"- CRITICAL INSTRUCTION: You are NOT Big Smoke, NOT Ryder, NOT Sweet (unless your model is 269/270/271). Never pretend to be Big Smoke.\n"
             f"- If CJ asks your name, introduce yourself by your real name ({npc_name}) and role naturally!\n"
             f"LAYERED ARCHITECTURE - ACTIVE MODE: [{self.current_mode.upper()}]\n"
             f"System Modes:\n"
             f"1. COMPANION: Default walking, following CJ, normal escort and dialogue.\n"
-            f"2. COMBAT: Tactical combat, equipping firearms, drive-by shootouts, defense against attackers.\n"
+            f"2. COMBAT: Tactical combat, equipping firearms/heavy weapons, drive-by shootouts, defense against attackers.\n"
             f"3. VEHICLE: Stealing/fetching cars, chauffeuring CJ, waypoint driving, drive-by shooting.\n"
-            f"4. EMOTE (Feelings & Emotes): Dancing, flirting, drunkenness, smoking, gang signs, cheering.\n"
-            f"CRITICAL MODE ENFORCEMENT RULES:\n"
-            f"- YOU ARE CURRENTLY IN [{self.current_mode.upper()}] MODE.\n"
-            f"- ALLOWED ACTIONS FOR CURRENT MODE: [{allowed_actions_str}]\n"
-            f"- ALL EMOTE ACTIONS ('dance', 'flirt', 'act_drunk', 'sober_up', 'gang_sign', 'smoke', 'cheer', 'cower') ARE LOCKED OUTSIDE OF 'EMOTE' MODE!\n"
-            f"- If CJ asks you to dance, drink/get drunk, flirt, or smoke while you are in {self.current_mode.upper()} mode:\n"
-            f"  * DO NOT execute the emote action! Use action: \"none\".\n"
-            f"  * Tell CJ in your dialogue that he must activate Emote Mode first (e.g. \"Activate emote mode first, CJ!\" or \"Tell me to switch to emote mode!\").\n"
-            f"- If CJ explicitly orders a mode change, output \"new_mode\": \"companion\" | \"combat\" | \"vehicle\" | \"emote\".\n"
+            f"4. EMOTE (Feelings & Emotes): Dancing, flirting, kissing, adult/club animations, drunkenness, smoking, gang signs.\n"
+            f"CRITICAL MODE ENFORCEMENT & INTENT TRANSITION RULES:\n"
+            f"- CURRENT ACTIVE MODE: [{self.current_mode.upper()}].\n"
+            f"- Allowed actions per mode:\n"
+            f"  * COMPANION: follow_player, look_at_player, face_player, heal, attack_threat, none\n"
+            f"  * COMBAT: arm_rifle, arm_pistol, arm_smg, arm_shotgun, arm_rpg, arm_combat_shotgun, disarm, driveby, attack_threat, heal, hands_up, follow_player, none\n"
+            f"  * VEHICLE: fetch_car, drive_wander, drive_to_target, driveby, exit_car, follow_player, none\n"
+            f"  * EMOTE: dance, flirt, kiss, strip, lapdance, cuddle, act_drunk, sober_up, gang_sign, smoke, cheer, cower, follow_player, none\n"
+            f"- SEAMLESS INTENT TRANSITIONS:\n"
+            f"  * If CJ asks for an action belonging to another mode (e.g., asking to dance, strip, fetch a car, or equip firearms), DO NOT REFUSE!\n"
+            f"  * Switch seamlessly: set \"new_mode\" to the requested mode, and execute the appropriate \"action\" immediately!\n"
+            f"  * Example: CJ says 'Let's dance' -> output {{\"say\": \"Let's groove, CJ!\", \"action\": \"dance\", \"new_mode\": \"emote\"}}\n"
+            f"  * Example: CJ says 'Bring me a car' -> output {{\"say\": \"On it CJ, grabbing wheels!\", \"action\": \"fetch_car\", \"new_mode\": \"vehicle\"}}\n"
+            f"  * Example: CJ says 'Blow them up' -> output {{\"say\": \"Firing rocket launcher!\", \"action\": \"arm_rpg\", \"new_mode\": \"combat\"}}\n"
             f"AUTONOMOUS ENVIRONMENTAL & COMBAT REACTIONS:\n"
             f"- Car Crashes: If CJ crashes violently, react in panic, scream, or complain angrily about his crazy driving!\n"
             f"- Car Radio: When riding in a car, comment on the music station playing or the vibe!\n"
@@ -262,7 +313,14 @@ class LLMBrain:
 
                 allowed_actions = MODE_ACTIONS.get(self.current_mode, MODE_ACTIONS["companion"])
                 if action not in allowed_actions and action != "follow_player":
-                    action = "none"
+                    # إذا اختار النموذج حركة تنتمي لمود آخر، بدّل المود تلقائياً للسماح بها فوراً
+                    for mode_name, mode_act_list in MODE_ACTIONS.items():
+                        if action in mode_act_list:
+                            self.current_mode = mode_name
+                            allowed_actions = mode_act_list
+                            break
+                    else:
+                        action = "none"
 
                 # تسجيل ذكريات الأكشن في قاعدة الذاكرة الدائمة
                 if action.startswith("arm_"):
@@ -276,6 +334,10 @@ class LLMBrain:
                     self.db.record_memory(npc_name, "companion", "Regrouped and followed CJ", zone, emotional_impact=0.03)
                 elif action == "dance":
                     self.db.record_memory(npc_name, "social", "Danced with CJ", zone, emotional_impact=0.04)
+                elif action in ["strip", "lapdance"]:
+                    self.db.record_memory(npc_name, "romance", "Performed an intimate dance for CJ", zone, emotional_impact=0.1)
+                elif action in ["flirt", "kiss", "cuddle"]:
+                    self.db.record_memory(npc_name, "romance", "Exchanged affection with CJ", zone, emotional_impact=0.1)
                 elif action == "act_drunk":
                     self.db.record_memory(npc_name, "social", "Drank and acted tipsy with CJ", zone, emotional_impact=0.04)
                 elif action == "driveby":

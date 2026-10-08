@@ -19,6 +19,58 @@ let lastSayAck = 0;
 let lastActionAck = 0;
 let wasPttPressed = false;
 
+// متغيرات شريط كتابة الأوامر داخل اللعبة (In-Game Text Command Bar)
+let isTypingMode = false;
+let typingBuffer = "";
+let lastTextCmdSeq = 0;
+let keyHeldStates = {};
+
+// متغيرات نظام الشخصيات والقدرات التكتيكية (Persona & Specialized Roles System)
+let currentNpcPersona = "companion";
+let lastMedicHealTime = 0;
+let lastHeavyAlertTime = 0;
+let lastAutonomousActionTime = 0;
+let lastGirlfriendFlirtTime = 0;
+
+function isKeyJustPressedCustom(vk) {
+    try {
+        let pressed = Pad.IsKeyPressed(vk);
+        let wasPressed = keyHeldStates[vk] || false;
+        keyHeldStates[vk] = pressed;
+        return pressed && !wasPressed;
+    } catch (_) {
+        return false;
+    }
+}
+
+function setPlayerControlSafe(playerObj, enabled) {
+    try {
+        if (playerObj && typeof playerObj.setControl === "function") {
+            playerObj.setControl(enabled);
+        }
+    } catch (_) {}
+}
+
+function safeGtaString(str) {
+    if (!str) return "";
+    // تنظيف أي رمز تيلدا عشوائي غير مغلق وأي حروف خارج خريطة خطوط GTA SA لمنع تحطيم الـ HUD
+    return String(str).replace(/~(?![rgbynwh]~)/gi, "").replace(/[_^|\\{}]/g, "");
+}
+
+function setTypingLock(playerObj, charObj, lockState) {
+    try {
+        if (charObj && Char.DoesExist(charObj)) {
+            charObj.freezePosition(lockState);
+            if (lockState) {
+                charObj.clearTasksImmediately();
+            }
+        }
+        if (playerObj) {
+            setPlayerControlSafe(playerObj, !lockState);
+        }
+    } catch (_) {}
+}
+
 let carFetchActive = false;
 let carFetchCar = null;
 let carFetchStartTime = 0;
@@ -171,6 +223,29 @@ function isPedFemale(ped) {
     return false;
 }
 
+// دالة الكشف المتقدم عن مركبات وطائرات الشرطة المعادية (Hostile Police Vehicles & Helicopters)
+function findNearbyHostileVehicle(centerX, centerY, centerZ, maxRadius) {
+    let bestCar = null;
+    let bestDist = maxRadius;
+    const POLICE_MODELS = [596, 597, 598, 599, 427, 433, 432, 497, 425, 528, 490];
+    try {
+        let car = World.GetRandomCarInSphereNoSaveRecursive(centerX, centerY, centerZ, maxRadius, false, true);
+        while (car && Car.DoesExist(car) && !Car.IsDead(car)) {
+            let model = car.getModel();
+            if (POLICE_MODELS.indexOf(model) !== -1) {
+                let pos = car.getCoordinates();
+                let d = Math.hypot(centerX - pos.x, centerY - pos.y, centerZ - pos.z);
+                if (d < bestDist) {
+                    bestDist = d;
+                    bestCar = car;
+                }
+            }
+            car = World.GetRandomCarInSphereNoSaveRecursive(centerX, centerY, centerZ, maxRadius, true, true);
+        }
+    } catch (_) {}
+    return bestCar;
+}
+
 // دالة الكشف المتقدم عن التهديدات المحيطة باللاعب أو المرافق
 function findNearbyThreat(playerChar, activePed, maxRadius) {
     if (!playerChar || !Char.DoesExist(playerChar)) return null;
@@ -183,6 +258,7 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
 
     let foundThreat = null;
     let bestDist = maxRadius;
+    const RIVAL_GANGS = [102, 103, 104, 108, 109, 110];
 
     try {
         let ped = World.GetRandomCharInSphereNoSaveRecursive(pPos.x, pPos.y, pPos.z, maxRadius, false, 1);
@@ -212,6 +288,20 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
                         let pType = ped.getPedType();
                         if (pType === 6) { // 6 = COP
                             isEnemy = true;
+                        }
+                    } catch (_) {}
+                }
+
+                // 4. فحص عصابات بالاس وفاغوس المعادية لشخصية القاتل/المجرم
+                if (!isEnemy && currentNpcPersona === "hitman") {
+                    try {
+                        let m = ped.getModel();
+                        if (RIVAL_GANGS.indexOf(m) !== -1) {
+                            let pedPos = ped.getCoordinates();
+                            let d = Math.hypot(pPos.x - pedPos.x, pPos.y - pedPos.y, pPos.z - pedPos.z);
+                            if (d <= 35.0) {
+                                isEnemy = true;
+                            }
                         }
                     } catch (_) {}
                 }
@@ -302,18 +392,18 @@ while (true) {
     // =========================================================
     try {
         let sayId = IniFile.ReadInt(INI_FILE, "BRIDGE", "say_id");
-        if (sayId !== undefined && sayId > lastSayAck) {
+        if (sayId !== undefined && sayId !== lastSayAck && sayId > 0) {
             lastSayAck = sayId;
             let sayText = IniFile.ReadString(INI_FILE, "BRIDGE", "say_text");
             if (sayText && sayText.length > 0) {
-                Text.PrintStringNow(sayText, 4000);
+                Text.PrintStringNow(safeGtaString(sayText), 4000);
                 IniFile.WriteInt(sayId, INI_FILE, "GAME", "say_ack");
                 log(`[AI SUBTITLE] Displayed: "${sayText}" (ID=${sayId})`);
             }
         }
 
         let actionId = IniFile.ReadInt(INI_FILE, "BRIDGE", "action_id");
-        if (actionId !== undefined && actionId > lastActionAck) {
+        if (actionId !== undefined && actionId !== lastActionAck && actionId > 0) {
             lastActionAck = actionId;
             let actionCmd = IniFile.ReadString(INI_FILE, "BRIDGE", "action_cmd");
             if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
@@ -370,15 +460,20 @@ while (true) {
                         Text.PrintStringNow("~g~[AI ARMED] Desert Eagle equipped!~w~", 3000);
                         log("[AI ACTION] NPC armed with Desert Eagle (24/348)");
                     }
-                } else if (actionCmd === "arm_smg" || actionCmd === "arm_uzi") {
+                } else if (actionCmd === "arm_smg" || actionCmd === "arm_mp5") {
+                    if (giveNpcWeapon(activePed, 29, 353, 500)) {
+                        Text.PrintStringNow("~g~[AI ARMED] MP5 Submachine Gun equipped!~w~", 3000);
+                        log("[AI ACTION] NPC armed with MP5 (29/353)");
+                    }
+                } else if (actionCmd === "arm_uzi") {
                     if (giveNpcWeapon(activePed, 28, 352, 500)) {
                         Text.PrintStringNow("~g~[AI ARMED] Micro Uzi equipped!~w~", 3000);
                         log("[AI ACTION] NPC armed with Micro Uzi (28/352)");
                     }
-                } else if (actionCmd === "arm_mp5") {
-                    if (giveNpcWeapon(activePed, 29, 353, 500)) {
-                        Text.PrintStringNow("~g~[AI ARMED] MP5 Submachine Gun equipped!~w~", 3000);
-                        log("[AI ACTION] NPC armed with MP5 (29/353)");
+                } else if (actionCmd === "arm_combat_shotgun") {
+                    if (giveNpcWeapon(activePed, 27, 351, 100)) {
+                        Text.PrintStringNow("~g~[AI ARMED] Combat Shotgun equipped!~w~", 3000);
+                        log("[AI ACTION] NPC armed with Combat Shotgun (27/351)");
                     }
                 } else if (actionCmd === "arm_shotgun") {
                     if (giveNpcWeapon(activePed, 25, 349, 100)) {
@@ -394,6 +489,71 @@ while (true) {
                     if (giveNpcWeapon(activePed, 30, 355, 600)) {
                         Text.PrintStringNow("~g~[AI ARMED] AK-47 equipped!~w~", 3000);
                         log("[AI ACTION] NPC armed with AK-47 (30/355)");
+                    }
+                } else if (actionCmd === "arm_rpg" || actionCmd === "arm_rocket") {
+                    if (giveNpcWeapon(activePed, 35, 359, 30)) {
+                        Text.PrintStringNow("~r~[AI ARMED] Rocket Launcher (RPG) equipped!~w~", 3500);
+                        log("[AI ACTION] NPC armed with Rocket Launcher (35/359)");
+                    }
+                } else if (actionCmd === "persona_hitman") {
+                    try {
+                        currentNpcPersona = "hitman";
+                        activePed.setAccuracy(100);
+                        activePed.setShootRate(100);
+                        activePed.setWeaponSkill(2);
+                        giveNpcWeapon(activePed, 31, 356, 800); // M4
+                        giveNpcWeapon(activePed, 24, 348, 300); // Desert Eagle
+                        Text.PrintStringNow("~r~[PERSONA: HITMAN]~w~ Max Accuracy (100%) & Lethal Combat Online!", 4000);
+                        log("[AI PERSONA] Hitman persona active: Accuracy=100%, M4 & Deagle equipped.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to set hitman persona: ${e}`);
+                    }
+                } else if (actionCmd === "persona_medic") {
+                    try {
+                        currentNpcPersona = "medic";
+                        activePed.setAccuracy(65);
+                        activePed.setShootRate(70);
+                        giveNpcWeapon(activePed, 24, 348, 200); // Desert Eagle for defense
+                        Text.PrintStringNow("~g~[PERSONA: MEDIC]~w~ Field Medic Online! Auto-Heal & Support Active.", 4000);
+                        log("[AI PERSONA] Field Medic persona active: Auto-heal passive enabled.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to set medic persona: ${e}`);
+                    }
+                } else if (actionCmd === "persona_heavy") {
+                    try {
+                        currentNpcPersona = "heavy";
+                        activePed.setAccuracy(90);
+                        activePed.addArmor(100);
+                        giveNpcWeapon(activePed, 35, 359, 50);  // Rocket Launcher
+                        giveNpcWeapon(activePed, 27, 351, 150); // Combat Shotgun
+                        Text.PrintStringNow("~r~[PERSONA: DEMOLITIONS]~w~ Heavy Weapons (RPG & Explosives) Online!", 4000);
+                        log("[AI PERSONA] Demolitions persona active: Armed with RPG & Combat Shotgun.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to set heavy persona: ${e}`);
+                    }
+                } else if (actionCmd === "persona_driver") {
+                    try {
+                        currentNpcPersona = "driver";
+                        Text.PrintStringNow("~b~[PERSONA: TRANSPORTER]~w~ Master Getaway Driver Ready! Speed Boosted.", 4000);
+                        log("[AI PERSONA] Transporter Driver persona active: Speed & getaway boosted.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to set driver persona: ${e}`);
+                    }
+                } else if (actionCmd === "persona_girlfriend") {
+                    try {
+                        currentNpcPersona = "girlfriend";
+                        Text.PrintStringNow("~p~[PERSONA: GIRLFRIEND]~w~ Romantic Companion Online! Special emotes unlocked.", 4000);
+                        log("[AI PERSONA] Girlfriend persona active: Special romance and club emotes unlocked.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to set girlfriend persona: ${e}`);
+                    }
+                } else if (actionCmd === "persona_custom") {
+                    try {
+                        currentNpcPersona = "custom";
+                        Text.PrintStringNow("~y~[PERSONA: CUSTOM]~w~ Custom Personality & Traits Active!", 4000);
+                        log("[AI PERSONA] Custom persona active.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to set custom persona: ${e}`);
                     }
                 } else if (actionCmd === "disarm") {
                     try {
@@ -479,9 +639,10 @@ while (true) {
                         if (activePed.isInAnyCar()) {
                             let curCar = activePed.getCarIsUsing();
                             if (curCar && Car.DoesExist(curCar)) {
-                                Task.CarDriveWander(activePed, curCar, 22.0, 2);
-                                Text.PrintStringNow("~g~[AI CHAUFFEUR] Cruising around Los Santos!~w~", 3500);
-                                log("[AI ACTION] NPC cruising around Los Santos in car.");
+                                let cruiseSpeed = (currentNpcPersona === "driver") ? 38.0 : 22.0;
+                                Task.CarDriveWander(activePed, curCar, cruiseSpeed, 2);
+                                Text.PrintStringNow(currentNpcPersona === "driver" ? "~b~[AI TRANSPORTER] High-speed getaway cruise active!~w~" : "~g~[AI CHAUFFEUR] Cruising around Los Santos!~w~", 3500);
+                                log(`[AI ACTION] NPC cruising around in car (Speed: ${cruiseSpeed}).`);
                             }
                         } else {
                             Text.PrintStringNow("~y~[AI] Must be inside a vehicle to drive!~w~", 3000);
@@ -500,9 +661,10 @@ while (true) {
                                 } catch (_) {}
 
                                 if (target && target.x !== undefined && (target.x !== 0 || target.y !== 0)) {
-                                    Task.CarDriveToCoord(activePed, curCar, target.x, target.y, target.z, 28.0, 0, 0, 2);
-                                    Text.PrintStringNow("~g~[AI CHAUFFEUR] En route to target waypoint!~w~", 4000);
-                                    log(`[AI ACTION] Driving to waypoint (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
+                                    let targetSpeed = (currentNpcPersona === "driver") ? 40.0 : 28.0;
+                                    Task.CarDriveToCoord(activePed, curCar, target.x, target.y, target.z, targetSpeed, 0, 0, 2);
+                                    Text.PrintStringNow(currentNpcPersona === "driver" ? "~b~[AI TRANSPORTER] High-speed pursuit to waypoint!~w~" : "~g~[AI CHAUFFEUR] En route to target waypoint!~w~", 4000);
+                                    log(`[AI ACTION] Driving to waypoint at speed ${targetSpeed} (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
                                 } else {
                                     Text.PrintStringNow("~y~[AI] Place a target marker on the map first!~w~", 3500);
                                 }
@@ -525,7 +687,8 @@ while (true) {
                     }
                 } else if (
                     actionCmd === "dance" || actionCmd === "dance_female" || actionCmd === "dance_male" ||
-                    actionCmd === "flirt" || actionCmd === "kiss" ||
+                    actionCmd === "flirt" || actionCmd === "kiss" || actionCmd === "cuddle" ||
+                    actionCmd === "strip" || actionCmd === "lapdance" ||
                     actionCmd === "act_drunk" || actionCmd === "drunk" || actionCmd === "drink" ||
                     actionCmd === "sober_up" || actionCmd === "sober" ||
                     actionCmd === "gang_sign" || actionCmd === "reppin" || actionCmd === "gang" ||
@@ -541,9 +704,25 @@ while (true) {
                         }
                     } catch (_) {}
 
-                    if (activeMode !== "emote") {
+                    if (activeMode !== "emote" && currentNpcPersona !== "girlfriend") {
                         log(`[AI GUARD] Emote "${actionCmd}" blocked: Active mode is "${activeMode}". Switch to "emote" mode first.`);
                         Text.PrintStringNow("~y~[AI GUARD] Emotes locked! Activate Emote Mode first.~w~", 3000);
+                    } else if (actionCmd === "strip") {
+                        try {
+                            playNpcAnimation(activePed, "strip_A", "STRIP", true, 14000);
+                            Text.PrintStringNow("~p~[AI EMOTE] Performing intimate dance for CJ!~w~", 3500);
+                            log("[AI EMOTE] Strip dance animation (strip_A / STRIP)");
+                        } catch (e) {
+                            log(`[AI ERROR] Failed to play strip animation: ${e}`);
+                        }
+                    } else if (actionCmd === "lapdance") {
+                        try {
+                            playNpcAnimation(activePed, "LAPDAN_D", "LAPDAN1", true, 14000);
+                            Text.PrintStringNow("~p~[AI EMOTE] Performing lap dance for CJ!~w~", 3500);
+                            log("[AI EMOTE] Lap dance animation (LAPDAN_D / LAPDAN1)");
+                        } catch (e) {
+                            log(`[AI ERROR] Failed to play lap dance animation: ${e}`);
+                        }
                     } else if (actionCmd === "dance" || actionCmd === "dance_female" || actionCmd === "dance_male") {
                     try {
                         let female = (actionCmd === "dance_female") || (actionCmd !== "dance_male" && isPedFemale(activePed));
@@ -642,7 +821,7 @@ while (true) {
     // =========================================================
     try {
         if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
-            let isPttPressed = Pad.IsKeyPressed(84) || Pad.IsKeyPressed(86);
+            let isPttPressed = !isTypingMode && (Pad.IsKeyPressed(84) || Pad.IsKeyPressed(86));
             if (isPttPressed) {
                 if (!wasPttPressed) {
                     wasPttPressed = true;
@@ -666,6 +845,170 @@ while (true) {
         }
     } catch (e) {
         // حماية اللعبة
+    }
+
+    // =========================================================
+    // المرحلة 2.6: شريط كتابة الأوامر داخل اللعبة (In-Game Text Command Bar: Key ` / 192 or F6 / 117)
+    // =========================================================
+    try {
+        if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
+            // فتح أو إغلاق شريط الكتابة بالضغط على زر ذ / ` (192) أو F6 (117)
+            if (isKeyJustPressedCustom(192) || isKeyJustPressedCustom(117)) {
+                if (!isTypingMode) {
+                    isTypingMode = true;
+                    typingBuffer = "";
+                    setTypingLock(player, playerChar, true);
+                    log("[AI CHAT] In-game typing command bar opened.");
+                } else {
+                    isTypingMode = false;
+                    setTypingLock(player, playerChar, false);
+                    Text.PrintStringNow("~r~Command Cancelled~w~", 1000);
+                }
+            }
+
+            if (isTypingMode) {
+                // منع أي مهام أو حركات جسدية لـ CJ أثناء الكتابة (عزل كامل)
+                playerChar.clearTasksImmediately();
+
+                // إلغاء الأمر عبر Escape (27)
+                if (isKeyJustPressedCustom(27)) {
+                    isTypingMode = false;
+                    setTypingLock(player, playerChar, false);
+                    Text.PrintStringNow("~r~Command Cancelled~w~", 1000);
+                }
+                // تأكيد وإرسال الأمر عبر Enter (13)
+                else if (isKeyJustPressedCustom(13)) {
+                    isTypingMode = false;
+                    setTypingLock(player, playerChar, false);
+                    let finalCmd = typingBuffer.trim();
+                    if (finalCmd.length > 0) {
+                        lastTextCmdSeq++;
+                        IniFile.WriteString(finalCmd, INI_FILE, "GAME", "text_cmd");
+                        IniFile.WriteInt(lastTextCmdSeq, INI_FILE, "GAME", "text_cmd_id");
+                        Text.PrintStringNow("~y~AI:~w~ Command Sent: " + safeGtaString(finalCmd), 2000);
+                        log(`[AI CHAT] Sent in-game text command #${lastTextCmdSeq}: "${finalCmd}"`);
+                    }
+                }
+                // مسح حرف عبر Backspace (8)
+                else if (isKeyJustPressedCustom(8)) {
+                    if (typingBuffer.length > 0) {
+                        typingBuffer = typingBuffer.slice(0, -1);
+                    }
+                }
+                // مسافة عبر Space (32)
+                else if (isKeyJustPressedCustom(32)) {
+                    if (typingBuffer.length < 45) {
+                        typingBuffer += " ";
+                    }
+                }
+                // سلاش / عبر (191 أو 111)
+                else if (isKeyJustPressedCustom(191) || isKeyJustPressedCustom(111)) {
+                    if (typingBuffer.length < 45) {
+                        typingBuffer += "/";
+                    }
+                }
+                // نقطتان : أو فاصلة منقوطة عبر (186)
+                else if (isKeyJustPressedCustom(186)) {
+                    if (typingBuffer.length < 45) {
+                        typingBuffer += ":";
+                    }
+                }
+                // شرطة - عبر (189 أو 109)
+                else if (isKeyJustPressedCustom(189) || isKeyJustPressedCustom(109)) {
+                    if (typingBuffer.length < 45) {
+                        typingBuffer += "-";
+                    }
+                }
+                // نقطة . عبر (190 أو 110)
+                else if (isKeyJustPressedCustom(190) || isKeyJustPressedCustom(110)) {
+                    if (typingBuffer.length < 45) {
+                        typingBuffer += ".";
+                    }
+                }
+                else {
+                    // فحص الحروف A-Z (65 إلى 90)
+                    for (let vk = 65; vk <= 90; vk++) {
+                        if (isKeyJustPressedCustom(vk)) {
+                            if (typingBuffer.length < 45) {
+                                typingBuffer += String.fromCharCode(vk).toLowerCase();
+                            }
+                            break;
+                        }
+                    }
+                    // فحص الأرقام 0-9 (48 إلى 57)
+                    for (let vk = 48; vk <= 57; vk++) {
+                        if (isKeyJustPressedCustom(vk)) {
+                            if (typingBuffer.length < 45) {
+                                typingBuffer += String.fromCharCode(vk);
+                            }
+                            break;
+                        }
+                    }
+                }
+
+                // عرض الشريط الحي على شاشة اللعبة بنصوص آمنة تماماً
+                if (isTypingMode) {
+                    Text.PrintStringNow("~g~AI CMD:~w~ " + safeGtaString(typingBuffer) + "~n~~w~[ENTER]=Send   [ESC]=Cancel", 250);
+                }
+            }
+        } else {
+            if (isTypingMode) {
+                isTypingMode = false;
+                setTypingLock(player, playerChar, false);
+            }
+        }
+    } catch (e) {
+        if (isTypingMode) {
+            isTypingMode = false;
+            setTypingLock(player, playerChar, false);
+        }
+        log(`[AI CHAT ERROR] ${e}`);
+    }
+
+    // =========================================================
+    // قدرات الشخصيات التكتيكية التلقائية (Persona Autonomous Passives)
+    // =========================================================
+    if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
+        // 1. قدرة المعالج الميداني (Medic Auto-Heal Passive)
+        if (currentNpcPersona === "medic" && (now - lastMedicHealTime > 20000)) {
+            try {
+                let cjHp = playerChar.getHealth();
+                let npcHp = activePed.getHealth();
+                if (cjHp < 65 || npcHp < 50) {
+                    lastMedicHealTime = now;
+                    playerChar.setHealth(100);
+                    playerChar.addArmor(50);
+                    activePed.setHealth(100);
+                    Text.PrintStringNow("~g~[MEDIC SUPPORT] First Aid applied! CJ & Squad healed.~w~", 3500);
+                    log("[AI MEDIC PASSIVE] Healed wounded player & squad.");
+                }
+            } catch (_) {}
+        }
+
+        // 2. قدرة خبير المتفجرات ضد الشرطة (Heavy Demolitions Anti-Police Passive)
+        if (currentNpcPersona === "heavy" && (now - lastHeavyAlertTime > 15000)) {
+            try {
+                let wantedLvl = player.storeWantedLevel();
+                if (wantedLvl >= 3) {
+                    lastHeavyAlertTime = now;
+                    giveNpcWeapon(activePed, 35, 359, 20); // RPG
+                    Text.PrintStringNow("~r~[DEMOLITIONS ALERT] High Wanted Level! Rocket artillery ready!~w~", 3500);
+                    log("[AI HEAVY PASSIVE] Wanted level >= 3. Switched to Rocket Launcher.");
+                }
+            } catch (_) {}
+        }
+
+        // 3. صيانة سيارة السائق المحترف (Transporter Vehicle Auto-Maintenance)
+        if (currentNpcPersona === "driver" && activePed.isInAnyCar()) {
+            try {
+                let dCar = activePed.getCarIsUsing();
+                if (dCar && Car.DoesExist(dCar) && !Car.IsDead(dCar)) {
+                    if (dCar.getHealth() < 650) {
+                        dCar.setHealth(1000);
+                    }
+                }
+            } catch (_) {}
+        }
     }
 
     // =========================================================
@@ -879,17 +1222,25 @@ while (true) {
                     if (!activePed.isInAnyCar() && !activePed.isGettingInToACar()) {
                         let playerCar = playerChar.getCarIsUsing();
                         if (playerCar && Car.DoesExist(playerCar)) {
-                            let maxSeats = playerCar.getMaximumNumberOfPassengers();
-                            let freeSeat = -1;
-                            for (let s = 0; s < maxSeats; s++) {
-                                if (playerCar.isPassengerSeatFree(s)) {
-                                    freeSeat = s;
-                                    break;
+                            // قدرة السائق المحترف: ركوب مقعد السائق تلقائياً إذا ركب CJ كمرافق
+                            if (currentNpcPersona === "driver" && playerCar.isDriverSeatFree()) {
+                                activePed.clearTasksImmediately();
+                                Task.EnterCarAsDriver(activePed, playerCar, -1);
+                                Text.PrintStringNow("~b~[TRANSPORTER] Taking the wheel, CJ! Sit back!~w~", 3000);
+                                log("[AI DRIVER] CJ in passenger seat. Driver taking wheel autonomously!");
+                            } else {
+                                let maxSeats = playerCar.getMaximumNumberOfPassengers();
+                                let freeSeat = -1;
+                                for (let s = 0; s < maxSeats; s++) {
+                                    if (playerCar.isPassengerSeatFree(s)) {
+                                        freeSeat = s;
+                                        break;
+                                    }
                                 }
-                            }
-                            if (freeSeat !== -1) {
-                                Task.EnterCarAsPassenger(activePed, playerCar, -1, freeSeat);
-                                log(`[AI NPC] Commanding NPC to enter vehicle in passenger seat ${freeSeat}`);
+                                if (freeSeat !== -1) {
+                                    Task.EnterCarAsPassenger(activePed, playerCar, -1, freeSeat);
+                                    log(`[AI NPC] Commanding NPC to enter vehicle in passenger seat ${freeSeat}`);
+                                }
                             }
                         }
                     }
@@ -902,49 +1253,125 @@ while (true) {
             }
 
             // =========================================================
-            // المرحلة 5.2: الدفاع الذاتي وإطلاق النار من المركبة (Drive-By Combat & Threat Defense)
+            // المرحلة 5.2: الذكاء التكتيكي المحلي التلقائي للشخصيات (Autonomous Persona Tactics Engine - 0 API Calls)
             // =========================================================
             if (!carFetchActive && now - lastThreatCheck > 500) {
                 lastThreatCheck = now;
                 try {
-                    let threat = findNearbyThreat(playerChar, activePed, 55.0);
+                    let threatScanRadius = (currentNpcPersona === "hitman" || currentNpcPersona === "heavy") ? 65.0 : 45.0;
+                    let threat = findNearbyThreat(playerChar, activePed, threatScanRadius);
+
                     if (threat && Char.DoesExist(threat) && !Char.IsDead(threat)) {
                         currentThreatChar = threat;
 
-                        // فحص وضع الركوب: هل اللاعب والمرافق داخل سيارة؟
+                        // 1. تكتيكات الشخصية أثناء التواجد في المركبة (In-Vehicle Persona Tactics)
                         if (playerChar.isInAnyCar() && activePed.isInAnyCar()) {
                             let playerCar = playerChar.getCarIsUsing();
                             let isDriver = (playerCar && Car.DoesExist(playerCar) && playerCar.getDriver() === activePed);
-                            if (!isDriver) {
-                                // المرافق راكب في المقعد الجانبي/الخلفي -> تنفيذ Drive-By فوري
+
+                            if (isDriver && currentNpcPersona === "driver") {
+                                // السائق المحترف: الهروب السريع والتفادي التلقائي عند التعرض لهجوم
                                 if (now - lastDriveByTime > 3000) {
                                     lastDriveByTime = now;
-                                    let threatCar = null;
-                                    try {
-                                        if (threat.isInAnyCar()) {
-                                            threatCar = threat.getCarIsUsing();
-                                        }
-                                    } catch (_) {}
+                                    Task.CarDriveWander(activePed, playerCar, 44.0, 2);
+                                    Text.PrintStringNow("~b~[TRANSPORTER] Evasive getaway maneuver initiated!~w~", 2500);
+                                    log("[AI DRIVER] Executing high-speed evasive getaway maneuver!");
+                                }
+                            } else if (!isDriver) {
+                                // المرافق في المقعد الجانبي: إطلاق نار من النافذة (Drive-By)
+                                if (now - lastDriveByTime > 2500) {
+                                    lastDriveByTime = now;
+                                    let threatCar = threat.isInAnyCar() ? threat.getCarIsUsing() : null;
                                     engageDriveBy(activePed, threat, threatCar);
-                                    Text.PrintStringNow("~r~[AI COMBAT] VEHICLE DRIVE-BY INITIATED!~w~", 2500);
+                                    if (currentNpcPersona === "hitman") {
+                                        Text.PrintStringNow("~r~[HITMAN] Lethal Drive-By headshots engaged!~w~", 2500);
+                                    } else {
+                                        Text.PrintStringNow("~r~[AI COMBAT] VEHICLE DRIVE-BY INITIATED!~w~", 2500);
+                                    }
                                     log("[AI COMBAT] NPC hanging out window in drive-by attack!");
                                 }
                             }
-                        } else if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
-                            // على الأقدام: الدفاع التلقائي عن CJ عند التعرض لهجوم
-                            let curWep = activePed.getCurrentWeapon();
-                            if (curWep === 0) {
-                                giveNpcWeapon(activePed, 31, 356, 500); // M4
+                        }
+                        // 2. تكتيكات الشخصية التلقائية على الأقدام (On-Foot Persona Tactics)
+                        else if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
+                            // أ. خبير المتفجرات (Demolitions & Heavy): التصدي للمركبات ومروحيات الشرطة
+                            if (currentNpcPersona === "heavy") {
+                                let wantedLvl = player.storeWantedLevel();
+                                let pedPos = activePed.getCoordinates();
+                                let hostileCar = (wantedLvl >= 2) ? findNearbyHostileVehicle(pedPos.x, pedPos.y, pedPos.z, 65.0) : null;
+
+                                if (hostileCar && now - lastDriveByTime > 3500) {
+                                    lastDriveByTime = now;
+                                    giveNpcWeapon(activePed, 35, 359, 30); // RPG
+                                    Task.DestroyCar(activePed, hostileCar);
+                                    Text.PrintStringNow("~r~[DEMOLITIONS] Targeting police vehicle/chopper with RPG!~w~", 3000);
+                                    log("[AI HEAVY] Firing Rocket Launcher at hostile vehicle/aircraft!");
+                                } else {
+                                    let curWep = activePed.getCurrentWeapon();
+                                    if (curWep !== 27 && curWep !== 35) {
+                                        giveNpcWeapon(activePed, 27, 351, 150); // Combat Shotgun
+                                    }
+                                    if (now - lastDriveByTime > 3500) {
+                                        lastDriveByTime = now;
+                                        Task.KillCharOnFoot(activePed, threat);
+                                        Text.PrintStringNow("~r~[DEMOLITIONS] Heavy suppressive fire engaged!~w~", 2500);
+                                        log("[AI HEAVY] Combat Shotgun ground suppression active!");
+                                    }
+                                }
                             }
-                            if (now - lastDriveByTime > 4000) {
-                                lastDriveByTime = now;
-                                Task.KillCharOnFoot(activePed, threat);
-                                Text.PrintStringNow("~r~[AI COMBAT] DEFENDING CJ! ENGAGING HOSTILE!~w~", 2500);
-                                log("[AI COMBAT] Autonomous threat defense: engaging hostile on foot.");
+                            // ب. القاتل المحترف (Hitman): هجوم فتاك بدقة 100%
+                            else if (currentNpcPersona === "hitman") {
+                                let curWep = activePed.getCurrentWeapon();
+                                if (curWep === 0) {
+                                    giveNpcWeapon(activePed, 31, 356, 800); // M4
+                                }
+                                activePed.setAccuracy(100);
+                                activePed.setShootRate(100);
+                                if (now - lastDriveByTime > 3000) {
+                                    lastDriveByTime = now;
+                                    Task.KillCharOnFoot(activePed, threat);
+                                    Text.PrintStringNow("~r~[HITMAN] Target in sight! Eliminating hostile!~w~", 2500);
+                                    log("[AI HITMAN] Autonomous lethal headshot engagement!");
+                                }
+                            }
+                            // ج. المعالج الميداني (Medic): دفاع محكم وحماية CJ
+                            else if (currentNpcPersona === "medic") {
+                                let curWep = activePed.getCurrentWeapon();
+                                if (curWep === 0) {
+                                    giveNpcWeapon(activePed, 24, 348, 200); // Desert Eagle
+                                }
+                                if (now - lastDriveByTime > 4000) {
+                                    lastDriveByTime = now;
+                                    Task.KillCharOnFoot(activePed, threat);
+                                    Text.PrintStringNow("~g~[FIELD MEDIC] Defensive cover fire! Stay back CJ!~w~", 2500);
+                                    log("[AI MEDIC] Defensive suppressive fire to protect player.");
+                                }
+                            }
+                            // د. الحبيبة (Girlfriend): ذعر وتفادي خلف CJ
+                            else if (currentNpcPersona === "girlfriend") {
+                                if (now - lastDriveByTime > 5000) {
+                                    lastDriveByTime = now;
+                                    Task.HandsUp(activePed, 2500);
+                                    Text.PrintStringNow("~p~[GIRLFRIEND] CJ watch out! Stay safe baby!~w~", 3000);
+                                    log("[AI GIRLFRIEND] Emotional protective reaction during combat.");
+                                }
+                            }
+                            // هـ. الوضع العادي (Companion): دفاع تقليدي
+                            else {
+                                let curWep = activePed.getCurrentWeapon();
+                                if (curWep === 0) {
+                                    giveNpcWeapon(activePed, 31, 356, 500); // M4
+                                }
+                                if (now - lastDriveByTime > 4000) {
+                                    lastDriveByTime = now;
+                                    Task.KillCharOnFoot(activePed, threat);
+                                    Text.PrintStringNow("~r~[AI COMBAT] DEFENDING CJ! ENGAGING HOSTILE!~w~", 2500);
+                                    log("[AI COMBAT] Autonomous threat defense: engaging hostile on foot.");
+                                }
                             }
                         }
                     } else {
-                        // لا يوجد خطر حالي، إذا كانت الشخصية في وضع هجوم سابق انتهى الخطر، نعيدها للتبعية
+                        // زوال الخطر: إعادة الشخصية لتبعية CJ المباشرة
                         if (currentThreatChar !== null) {
                             currentThreatChar = null;
                             if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
@@ -967,8 +1394,8 @@ while (true) {
         }
     }
 
-    // فحص ضغط المفتاح H (كود 72)
-    if (Pad.IsKeyPressed(72)) {
+    // فحص ضغط المفتاح H (كود 72) - يتم تجاهله تماماً أثناء فتح شريط كتابة الأوامر
+    if (!isTypingMode && Pad.IsKeyPressed(72)) {
         if (now - lastPress > 800) { // منع التكرار السريع
             lastPress = now;
 

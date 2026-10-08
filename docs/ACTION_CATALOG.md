@@ -34,13 +34,16 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 ### 2.2 Mode: `combat`
 | Action Command | Weapon Given | Model ID | Ammo | Description | Example Voice Prompt |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `arm_rifle` | M4 (ID 31) | 356 | 500 | Equips military assault rifle with 85% accuracy. | "Equip your M4", "Get the heavy rifle!" |
-| `arm_pistol` | Desert Eagle (ID 24) | 348 | 150 | Equips high caliber heavy handgun. | "Pull out your Deagle", "Grab the pistol" |
-| `arm_smg` | MP5 (ID 29) | 353 | 400 | Equips rapid fire submachine gun. | "Take this MP5", "Pull out the SMG" |
-| `arm_shotgun` | Combat Shotgun (ID 27) | 351 | 100 | Equips tactical shotgun for close quarters. | "Grab the shotgun", "Get ready for breach" |
+| `arm_rifle` | M4 (ID 31) | 356 | 600 | Equips military assault rifle with 85% accuracy. | "Equip your M4", "Get the heavy rifle!" |
+| `arm_rpg` | Rocket Launcher (ID 35) | 359 | 50 | Equips heavy anti-armor / anti-aircraft RPG launcher. | "Bring out the rockets!", "Blow them to hell!" |
+| `arm_combat_shotgun` | Combat Shotgun (ID 27) | 351 | 150 | Equips tactical semi-auto SPAS-12 combat shotgun. | "Grab the combat shotgun", "Tactical breach!" |
+| `arm_pistol` | Desert Eagle (ID 24) | 348 | 250 | Equips high caliber heavy handgun. | "Pull out your Deagle", "Grab the pistol" |
+| `arm_smg` | MP5 (ID 29) | 353 | 500 | Equips rapid fire submachine gun. | "Take this MP5", "Pull out the SMG" |
+| `arm_uzi` | Micro Uzi (ID 28) | 352 | 500 | Equips compact one-handed machine pistol. | "Equip the Uzi", "Pull out the Micro Uzi" |
+| `arm_shotgun` | Shotgun (ID 25) | 349 | 100 | Equips classic pump-action shotgun. | "Grab the shotgun", "Get the 12-gauge" |
 | `disarm` | Unarmed (ID 0) | - | 0 | Cleans hands, holsters weapons safely. | "Holster your gun", "Put it away" |
 | `driveby` | Active Weapon | - | - | Hangs out the vehicle window firing at hostiles. | "Drive-by time!", "Hang out the window!" |
-| `hands_up` | `Task.HandsUp(ped, 6000)` | - | - | Raises hands in surrender (police standoff). | "Put your hands up!", "Don't shoot!" |
+| `hands_up` | `Task.HandsUp(ped, 3000)` | - | - | Raises hands in surrender (police standoff). | "Put your hands up!", "Don't shoot!" |
 
 ---
 
@@ -48,8 +51,8 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 | Action Command | Opcode / Implementation | Description | Example Voice Prompt |
 | :--- | :--- | :--- | :--- |
 | `fetch_car` | 3-Phase Engine | Sprints to nearest empty car, enters, drives to CJ. | "Bring me a car", "Go find a ride" |
-| `drive_wander` | `Task.CarDriveWander` | Drives around San Andreas casually while CJ chills. | "Just drive around", "Take the wheel" |
-| `drive_to_target` | `Task.CarDriveToCoord` | Drives CJ directly to the yellow target map marker. | "Drive to my marker", "Take us there" |
+| `drive_wander` | `Task.CarDriveWander` | Drives around San Andreas casually while CJ chills (Speed: 22.0 or 38.0 for Driver). | "Just drive around", "Take the wheel" |
+| `drive_to_target` | `Task.CarDriveToCoord` | Drives CJ directly to the yellow target map marker (Speed: 28.0 or 40.0 for Driver). | "Drive to my marker", "Take us there" |
 | `exit_car` | `Task.LeaveAnyCar` | Steps out of the car safely. | "Get out of the car", "Step out" |
 
 ---
@@ -57,13 +60,29 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 ### 2.4 Mode: `emote`
 | Action Command | Animation / IFP | Description | Example Voice Prompt |
 | :--- | :--- | :--- | :--- |
-| `dance` | `DANCE / DANCING` | Busts moves with San Andreas club dance animations. | "Dance with me!", "Show me your moves" |
-| `flirt` | `BLOWJOB / MISC` | Flirtatious emote depending on gender & archetype. | "Give me a kiss", "Come closer" |
-| `act_drunk` | `WALK_DRUNK` | Stumbles around with slurred gait. | "Have a drink", "Act drunk" |
+| `dance` | `DAN_Loop_A / dnce_M_a` | Busts moves with San Andreas club dance animations. | "Dance with me!", "Show me your moves" |
+| `strip` | `strip_A / STRIP` | Adult / club exotic dance routine. | "Dance for me", "Give me a private dance" |
+| `lapdance` | `LAPDAN_D / LAPDAN1` | Club lap dance animation routine. | "Give me a lap dance", "Show me some love" |
+| `kiss` / `flirt` | `Grlfrd_Kiss_01 / KISSING` | Romantic kiss and affectionate greeting. | "Give me a kiss", "Come here sweetheart" |
+| `act_drunk` | `WALK_drunk / PED` | Stumbles around with slurred gait. | "Have a drink", "Act drunk" |
 | `sober_up` | Standard Walk | Returns to normal walking animation group. | "Sober up", "Walk straight" |
-| `smoke` | `SMK_IN / GANGS` | Lights up a cigarette and puffs. | "Take a smoke", "Light one up" |
-| `cheer` | `RIOT_CHANT / RIOT` | Cheers and roots for CJ with gang chants. | "Celebrate!", "We did it!" |
-| `cower` | `DUCK_COWER / PED` | Cowering panic stance when under fire. | "Take cover!", "Duck down!" |
+| `smoke` | `M_smk_loop / F_smklean_loop` | Lights up a cigarette and puffs. | "Take a smoke", "Light one up" |
+| `cheer` | `bd_clap / DANCING` | Cheers and claps for CJ with authentic dance applause. | "Celebrate!", "We did it!" |
+| `cower` | `DUCK_cower / PED` | Cowering panic stance when under fire. | "Take cover!", "Duck down!" |
+
+---
+
+### 2.5 Persona System (`/persona`)
+Specialized operational roles with dynamic in-game stat overrides:
+
+| Persona | Key Stats & Overrides | In-Engine Autonomous Reflexes (0 API Cost) | Command Shortcut |
+| :--- | :--- | :--- | :--- |
+| **Hitman** | 100% Accuracy, 100 Shoot Rate, M4 & Deagle | Autonomous lethal engagement against threats, Ballas, Vagos, and police up to 65m. | `/persona hitman`, `/hitman` |
+| **Field Medic** | 65% Accuracy, Deagle sidearm, Defensive | Autonomous Field Triage: heals CJ to 100 HP + 50 armor whenever CJ drops below 70 HP (18s cooldown). | `/persona medic`, `/medic` |
+| **Demolitions** | Heavy RPG (ID 35), SPAS-12, 100 Armor | Anti-Air & Anti-Vehicle: Locks onto and destroys police cruisers, SWAT vans, and police helicopters with rockets (Wanted $\ge 2$). | `/persona heavy`, `/heavy` |
+| **Transporter** | Evasion Speed: 44.0, Auto-repair | Autonomous Getaway: hops in as driver if CJ enters passenger seat; auto-repairs engine health if damaged. | `/persona driver`, `/driver` |
+| **Girlfriend** | Romance / Club emotes unlocked | Affectionate greetings and idle waves; cowers and screams protective warnings during shootouts. | `/persona girlfriend`, `/girlfriend` |
+| **Custom** | Player-defined System Instruction | Roleplays strictly according to custom player instructions stored in SQLite. | `/persona <custom>` |
 
 ---
 

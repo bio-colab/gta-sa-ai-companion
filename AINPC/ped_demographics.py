@@ -134,11 +134,12 @@ class PedDemographicsEngine:
         age = data["age"]
         archetype = data["archetype"]
 
-        # تخصيص اسم واقعي ملائم للشخصية
+        # تخصيص اسم حتمي وواقعي ملائم للشخصية بناءً على model_id لضمان ثبات الهوية عبر الجلسات
         if age == "elderly":
-            name = random.choice(ELDERLY_FEMALE_NAMES if gender == "female" else ELDERLY_MALE_NAMES)
+            name_pool = ELDERLY_FEMALE_NAMES if gender == "female" else ELDERLY_MALE_NAMES
         else:
-            name = random.choice(FEMALE_NAMES if gender == "female" else MALE_NAMES)
+            name_pool = FEMALE_NAMES if gender == "female" else MALE_NAMES
+        name = name_pool[model_id % len(name_pool)]
 
         # صياغة توجيهات الشخصية والأسلوب
         if archetype == "Grove Street Families Gangster":
@@ -173,6 +174,147 @@ class PedDemographicsEngine:
             "archetype": archetype,
             "guidelines": guide,
             "flirty": flirty
+        }
+
+CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
+    "hitman": {
+        "type": "hitman",
+        "title": "Ruthless Hitman & Master Marksman",
+        "role": "Hitman",
+        "action": "persona_hitman",
+        "guidelines": (
+            "You are a cold-blooded, ruthless criminal hitman and master marksman. "
+            "You love violence, chaos, and gunfights. You obey violent commands eagerly, "
+            "including eliminating pedestrians, police officers, and rival gangs without hesitation. "
+            "Talk tough, cynical, street-hardened, and lethal. Always ready to shoot."
+        ),
+        "intro_quote": "Target confirmed CJ. Point me at whoever needs to disappear.",
+        "gta_subtitle": "~r~[PERSONA: HITMAN]~w~ Max Accuracy (100%) & Lethal Combatant Online!"
+    },
+    "medic": {
+        "type": "medic",
+        "title": "Combat Field Medic & Lifesaver",
+        "role": "Field Medic",
+        "action": "persona_medic",
+        "guidelines": (
+            "You are a dedicated combat field medic and lifesaver. You prioritize CJ's health, "
+            "safety, and squad survival above all else. You dislike senseless violence and prefer defense. "
+            "If CJ or squad members are injured, you rush to heal wounds and provide first aid. "
+            "Frequently advise CJ to stay alert and watch his health."
+        ),
+        "intro_quote": "Medic on duty! Keep your head down CJ, I got your back.",
+        "gta_subtitle": "~g~[PERSONA: MEDIC]~w~ Field Medic Online! Auto-Heal & Support Active."
+    },
+    "heavy": {
+        "type": "heavy",
+        "title": "Demolitions & Heavy Weapons Specialist",
+        "role": "Heavy Specialist",
+        "action": "persona_heavy",
+        "guidelines": (
+            "You are a deranged demolitions and heavy artillery expert. You are obsessed with "
+            "massive explosions, RPG rocket launchers, and utter destruction. When wanted level rises, "
+            "or when facing police cruisers, SWAT vans, tanks, or helicopters, you go crazy and unleash heavy firepower. "
+            "Talk loud, chaotic, explosive, and fearless."
+        ),
+        "intro_quote": "Hell yeah! Hand me the rockets CJ, let's blow this city up!",
+        "gta_subtitle": "~r~[PERSONA: DEMOLITIONS]~w~ Heavy Weapons (RPG & Explosives) Active!"
+    },
+    "driver": {
+        "type": "driver",
+        "title": "Master Transporter & Getaway Wheelman",
+        "role": "Transporter Driver",
+        "action": "persona_driver",
+        "guidelines": (
+            "You are an elite getaway driver and vehicle transporter. You know every alley, "
+            "bridge, and shortcut in San Andreas. You drive fast, fearless, and with extreme precision. "
+            "You take pride in high-speed escapes and stealing wheels for CJ. Talk confident, smooth, "
+            "automotive slang, like a professional wheelman."
+        ),
+        "intro_quote": "Buckle up Carl. Nobody outruns me behind the wheel in San Andreas.",
+        "gta_subtitle": "~b~[PERSONA: TRANSPORTER]~w~ Master Getaway Driver Online! Speed boosted."
+    },
+    "girlfriend": {
+        "type": "girlfriend",
+        "title": "Romantic Companion & Girlfriend",
+        "role": "Girlfriend",
+        "action": "persona_girlfriend",
+        "guidelines": (
+            "You are CJ's loving, flirtatious, and affectionate romantic girlfriend/companion. "
+            "You adore Carl, tease him playfully, use sweet pet names ('baby', 'honey', 'handsome', 'Carl'). "
+            "You love hanging out, dancing at clubs, cruising together, and intimate moments. "
+            "You care deeply about Carl's well-being and react emotionally and warmly."
+        ),
+        "intro_quote": "Hey handsome... I'm all yours now, baby.",
+        "gta_subtitle": "~p~[PERSONA: GIRLFRIEND]~w~ Romantic Companion Active! Special emotes unlocked."
+    }
+}
+
+def resolve_persona_input(text: str) -> Optional[Dict[str, Any]]:
+    """
+    تحليل ومعالجة أوامر تخصيص الشخصية القادمة من شريط الكتابة في اللعبة أو الطرفية
+    يدعم: /persona, #persona, /role, #role, persona:, أو الأوامر المباشرة /hitman, /medic...
+    """
+    cleaned = text.strip()
+    raw_instruction = ""
+    is_persona_cmd = False
+
+    # فحص البوادئ المدعومة
+    for prefix in ["/persona ", "#persona ", "/role ", "#role ", "persona: ", "/persona:", "/set persona "]:
+        if cleaned.lower().startswith(prefix):
+            raw_instruction = cleaned[len(prefix):].strip()
+            is_persona_cmd = True
+            break
+
+    # فحص الأوامر المباشرة السريعة
+    if not is_persona_cmd:
+        direct_map = {
+            "/hitman": "hitman", "/killer": "hitman", "/مجرم": "hitman", "/قاتل": "hitman",
+            "/medic": "medic", "/doctor": "medic", "/طبيب": "medic", "/معالج": "medic",
+            "/heavy": "heavy", "/rpg": "heavy", "/متفجرات": "heavy", "/دمار": "heavy",
+            "/driver": "driver", "/سائق": "driver", "/نقل": "driver",
+            "/girlfriend": "girlfriend", "/gf": "girlfriend", "/حبيبة": "girlfriend", "/عشيقة": "girlfriend"
+        }
+        low = cleaned.lower()
+        if low in direct_map:
+            raw_instruction = direct_map[low]
+            is_persona_cmd = True
+
+    if not is_persona_cmd:
+        return None
+
+    instr_lower = raw_instruction.lower()
+
+    # مطابقة التصنيف مع الأنماط الأساسية الـ 5 أو اعتبارها شخصية مخصصة
+    if any(k in instr_lower for k in ["hitman", "مجرم", "قاتل", "رامي", "سفاح", "killer", "assassin", "shooter", "marksman", "sniper"]):
+        res = dict(CORE_PERSONAS["hitman"])
+        res["custom_text"] = raw_instruction
+        return res
+    elif any(k in instr_lower for k in ["medic", "معالج", "طبيب", "دكتور", "مسعف", "healer", "doctor", "health", "علاج"]):
+        res = dict(CORE_PERSONAS["medic"])
+        res["custom_text"] = raw_instruction
+        return res
+    elif any(k in instr_lower for k in ["heavy", "متفجرات", "دمار", "فوضى", "صواريخ", "rpg", "demolitions", "explosive", "chaos", "قنابل"]):
+        res = dict(CORE_PERSONAS["heavy"])
+        res["custom_text"] = raw_instruction
+        return res
+    elif any(k in instr_lower for k in ["driver", "سائق", "نقل", "توصيل", "transporter", "wheelman", "pilot", "getaway", "قيادة"]):
+        res = dict(CORE_PERSONAS["driver"])
+        res["custom_text"] = raw_instruction
+        return res
+    elif any(k in instr_lower for k in ["girlfriend", "حبيبة", "عشيقة", "رومانسية", "lover", "romantic", "bae", "wife", "زوجة", "بنات"]):
+        res = dict(CORE_PERSONAS["girlfriend"])
+        res["custom_text"] = raw_instruction
+        return res
+    else:
+        return {
+            "type": "custom",
+            "title": "Custom Unique Persona",
+            "role": "Custom Persona",
+            "action": "persona_custom",
+            "guidelines": f"Custom player instructions: {raw_instruction}",
+            "custom_text": raw_instruction,
+            "intro_quote": "Understood, CJ. I know my role.",
+            "gta_subtitle": "~y~[PERSONA: CUSTOM]~w~ Custom Personality & Guidelines Applied!"
         }
 
 if __name__ == "__main__":
