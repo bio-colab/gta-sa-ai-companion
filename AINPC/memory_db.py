@@ -200,8 +200,22 @@ class MemoryDB:
 
                 conn.commit()
 
-    def get_recent_memories(self, character_name: str, limit: int = 3) -> List[str]:
-        """استرجاع أحدث الذكريات المشتركة لصياغتها داخل سياق الذكاء الاصطناعي"""
+    def clean_persona_clutter(self):
+        """تنظيف الأدوار المتراكمة من الاختبارات السابقة لضمان بداية نقية لكل شخصية يتم تجنيدها"""
+        with self.lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("UPDATE characters SET persona = '', persona_custom = '';")
+                # حذف الذكريات المتداخلة القديمة الناتجة عن تجارب الأدوار السابقة
+                cursor.execute("""
+                DELETE FROM memories 
+                WHERE description LIKE '%assigned me the role%' 
+                   OR description LIKE '%Role assigned%';
+                """)
+                conn.commit()
+
+    def get_recent_memories(self, character_name: str, limit: int = 3, persona_filter: Optional[str] = None) -> List[str]:
+        """استرجاع أحدث الذكريات المشتركة مع فلترة ذكية حسب الشخصية النشطة لمنع تداخل الأدوار"""
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
@@ -209,10 +223,37 @@ class MemoryDB:
                 SELECT description, zone, event_type 
                 FROM memories 
                 WHERE character_name = ? 
-                ORDER BY id DESC LIMIT ?
-                """, (character_name, limit))
+                ORDER BY id DESC LIMIT 15
+                """, (character_name,))
                 rows = cursor.fetchall()
-                return [f"[{r['zone']}]: {r['description']}" for r in rows]
+
+                filtered = []
+                for r in rows:
+                    desc_lower = r["description"].lower()
+                    ev_type = r["event_type"].lower()
+
+                    # إذا كانت الشخصية النشطة ليست حبيبة، استبعاد أي ذكريات رومانسية أو حركات خاصة
+                    if persona_filter != "girlfriend":
+                        if any(k in desc_lower for k in ["kiss", "girlfriend", "lapdance", "strip", "honey", "baby", "handsome", "flirt"]):
+                            continue
+                        if ev_type in ["romance", "flirt"]:
+                            continue
+
+                    # إذا كانت الشخصية النشطة ليست متفجرات/ثقيلة، استبعاد ذكريات الصواريخ المفرطة
+                    if persona_filter != "heavy":
+                        if any(k in desc_lower for k in ["rocket", "rpg", "demolition", "blow up", "missile"]):
+                            continue
+
+                    # إذا كانت الشخصية مرافق طبيعي، استبعاد أي أثر للأدوار المتطرفة
+                    if not persona_filter:
+                        if any(k in desc_lower for k in ["hitman", "medic", "heavy", "driver", "girlfriend"]):
+                            continue
+
+                    filtered.append(f"[{r['zone']}]: {r['description']}")
+                    if len(filtered) >= limit:
+                        break
+
+                return filtered
 
     def get_character_status(self, character_name: str) -> Dict[str, Any]:
         """الحصول على ملخص العلاقة الحالية والثقة"""

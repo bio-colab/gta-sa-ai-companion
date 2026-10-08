@@ -256,6 +256,15 @@ def apply_persona_command(user_text: str) -> bool:
         intro_quote = brain.set_custom_persona(npc_model, persona_info)
 
         p_type = persona_info.get("type", "custom")
+        if p_type in ["companion", "reset", "none"]:
+            bridge_state["active_persona"] = ""
+            bridge_state["active_mode"] = "companion"
+            ini.update_bridge_section(bridge_state)
+            queue_say(f"{persona_info['gta_subtitle']}~n~~y~{npc_name}:~w~ {intro_quote}")
+            queue_action("persona_companion")
+            log(f"[PERSONA RESET] {npc_name} reset to default companion mode.")
+            return True
+
         bridge_state["active_persona"] = p_type
         ini.update_bridge_section(bridge_state)
 
@@ -755,7 +764,16 @@ def main():
                     # محرك كشف الأحداث الذكي والمحمي من استنزاف الـ API
                     if npc_active == 1:
                         if prev_npc_active == 0:
-                            # تحية التجنيد الأولى فقط ترسل إلى الذكاء الاصطناعي
+                            # تجنيد رفيق جديد: تنظيف وضمان بداية نقية بدون أي شخصية متوارثة
+                            log("====================================================================")
+                            log(f"  [NEW COMPANION RECRUITED] Model #{npc_model} joined CJ.")
+                            log("  [CLEAN SLATE] Initializing fresh companion session (No Persona Bleed).")
+                            log("====================================================================")
+                            brain.reset_session()
+                            brain.get_or_create_identity(npc_model)
+                            bridge_state["active_persona"] = ""
+                            bridge_state["active_mode"] = "companion"
+                            ini.update_bridge_section(bridge_state)
                             trigger_llm_event(latest_game_context, f"I just joined CJ as a companion here in {zone_name}!")
                         elif threat_active == 1 and prev_threat_active == 0:
                             # تبديل المود إلى القتال محلياً دون استهلاك الـ API
@@ -771,6 +789,15 @@ def main():
                             if brain.current_mode == "emote":
                                 set_active_mode("combat")
                             log(f"[LOCAL TACTICS] Police alert level raised to {cj_wanted} stars.")
+                    elif npc_active == 0 and prev_npc_active == 1:
+                        # تحرير الرفيق أو موته: إعادة ضبط كاملة وفورية
+                        log("====================================================================")
+                        log("  [COMPANION DISMISSED / DIED] Resetting persona & clearing session.")
+                        log("====================================================================")
+                        brain.reset_session()
+                        bridge_state["active_persona"] = ""
+                        bridge_state["active_mode"] = "companion"
+                        ini.update_bridge_section(bridge_state)
 
                     prev_cj_weapon = cj_weapon
                     prev_cj_wanted = cj_wanted

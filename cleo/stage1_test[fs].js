@@ -555,6 +555,22 @@ while (true) {
                     } catch (e) {
                         log(`[AI ERROR] Failed to set custom persona: ${e}`);
                     }
+                } else if (actionCmd === "persona_companion" || actionCmd === "persona_reset" || actionCmd === "persona_none" || actionCmd === "persona_default") {
+                    try {
+                        currentNpcPersona = "companion";
+                        activeMode = "companion";
+                        activePed.setAccuracy(65);
+                        activePed.setShootRate(50);
+                        let female = isPedFemale(activePed);
+                        activePed.setAnimGroup(female ? "woman" : "man");
+                        activePed.clearTasksImmediately();
+                        let grp = player.getGroup();
+                        grp.setMember(activePed);
+                        Text.PrintStringNow("~g~[PERSONA: RESET]~w~ Natural Companion Active!", 3500);
+                        log("[AI PERSONA] Persona reset to default companion.");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to reset persona: ${e}`);
+                    }
                 } else if (actionCmd === "disarm") {
                     try {
                         activePed.setCurrentWeapon(0);
@@ -1133,7 +1149,7 @@ while (true) {
     // فحص دوري لسلامة الكائن النشط
     if (activePed !== null) {
         if (!Char.DoesExist(activePed) || Char.IsDead(activePed)) {
-            log("[AI NPC] Active ped died or despawned. Resetting state.");
+            log("[AI NPC] Active ped died or despawned. Resetting state & persona.");
             try {
                 if (activePedBlip !== null) {
                     activePedBlip.remove();
@@ -1142,6 +1158,13 @@ while (true) {
                 }
             } catch (_) {}
             activePed = null;
+            currentNpcPersona = "companion";
+            activeMode = "companion";
+            try {
+                IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
+                IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
+                IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
+            } catch (_) {}
         } else {
             // إدارة مهمة إحضار السيارة الذاتية (Autonomous Vehicle Fetching Mission)
             if (carFetchActive) {
@@ -1408,6 +1431,12 @@ while (true) {
 
                     if (target && Char.DoesExist(target) && !Char.IsDead(target) && target !== playerChar) {
                         activePed = target;
+                        currentNpcPersona = "companion";
+                        activeMode = "companion";
+                        try {
+                            IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
+                            IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
+                        } catch (_) {}
                         
                         // 1. تنظيف أي مهمة سابقة للشخصية فوراً
                         activePed.clearTasksImmediately();
@@ -1501,6 +1530,13 @@ while (true) {
                     showTextBox("~y~AI BRAIN DISABLED~n~~w~NPC released safely.");
                     log("[AI NPC] Ped released safely.");
                     activePed = null;
+                    currentNpcPersona = "companion";
+                    activeMode = "companion";
+                    try {
+                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
+                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
+                        IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
+                    } catch (_) {}
                 } catch (e) {
                     log("[AI NPC Release Error]: " + e);
                     try {
@@ -1511,6 +1547,13 @@ while (true) {
                         }
                     } catch (_) {}
                     activePed = null;
+                    currentNpcPersona = "companion";
+                    activeMode = "companion";
+                    try {
+                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
+                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
+                        IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
+                    } catch (_) {}
                 }
             }
         }

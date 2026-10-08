@@ -256,6 +256,18 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         ),
         "intro_quote": "Hey handsome... I'm all yours now, baby.",
         "gta_subtitle": "~p~[PERSONA: GIRLFRIEND]~w~ Romantic Companion Active! Special emotes unlocked."
+    },
+    "companion": {
+        "type": "companion",
+        "title": "Natural Street Companion",
+        "role": "Loyal Companion",
+        "action": "persona_companion",
+        "guidelines": (
+            "You are a natural street companion. You follow CJ, watch his back, and converse "
+            "naturally and casually according to your demographic background without any extreme role."
+        ),
+        "intro_quote": "Alright CJ, I got your back. Let's roll.",
+        "gta_subtitle": "~g~[PERSONA: RESET]~w~ Natural Companion Active!"
     }
 }
 
@@ -282,7 +294,8 @@ def resolve_persona_input(text: str) -> Optional[Dict[str, Any]]:
             "/medic": "medic", "/doctor": "medic", "/طبيب": "medic", "/معالج": "medic",
             "/heavy": "heavy", "/rpg": "heavy", "/متفجرات": "heavy", "/دمار": "heavy",
             "/driver": "driver", "/سائق": "driver", "/نقل": "driver",
-            "/girlfriend": "girlfriend", "/gf": "girlfriend", "/حبيبة": "girlfriend", "/عشيقة": "girlfriend"
+            "/girlfriend": "girlfriend", "/gf": "girlfriend", "/حبيبة": "girlfriend", "/عشيقة": "girlfriend",
+            "/reset": "reset", "/companion": "companion", "/normal": "normal", "/عادي": "normal"
         }
         low = cleaned.lower()
         if low in direct_map:
@@ -294,8 +307,12 @@ def resolve_persona_input(text: str) -> Optional[Dict[str, Any]]:
 
     instr_lower = raw_instruction.lower()
 
-    # مطابقة التصنيف مع الأنماط الأساسية الـ 5 أو اعتبارها شخصية مخصصة
-    if any(k in instr_lower for k in ["hitman", "مجرم", "قاتل", "رامي", "سفاح", "killer", "assassin", "shooter", "marksman", "sniper"]):
+    # مطابقة التصنيف مع الأنماط الأساسية أو إعادة الضبط
+    if any(k in instr_lower for k in ["reset", "normal", "companion", "default", "none", "عادي", "افتراضي", "إلغاء", "تصفير"]):
+        res = dict(CORE_PERSONAS["companion"])
+        res["custom_text"] = ""
+        return res
+    elif any(k in instr_lower for k in ["hitman", "مجرم", "قاتل", "رامي", "سفاح", "killer", "assassin", "shooter", "marksman", "sniper"]):
         res = dict(CORE_PERSONAS["hitman"])
         res["custom_text"] = raw_instruction
         return res

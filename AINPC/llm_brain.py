@@ -61,9 +61,17 @@ class LLMBrain:
         self.demographics_engine = PedDemographicsEngine()
         self.current_mode = "companion"
         self.current_persona = None
+        self.session_memories: List[str] = []
 
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_key.startswith("gsk_"))
+
+    def reset_session(self):
+        """إعادة ضبط الجلسة بالكامل عند تحرير الـ NPC أو موته لضمان عزل تام للشخصيات والذكريات"""
+        self.current_identity = None
+        self.current_persona = None
+        self.current_mode = "companion"
+        self.session_memories.clear()
 
     def get_or_create_identity(self, model_id: int) -> dict:
         """تخصيص هوية وشخصية واقعية مع ربطها بالملف الديمغرافي والذاكرة الدائمة SQLite"""
@@ -81,23 +89,10 @@ class LLMBrain:
         # تسجيل أو استرجاع سجل الشخصية من قاعدة البيانات
         char_record = self.db.get_or_register_character(model_id, name, archetype)
 
-        # استرجاع وتطبيق الشخصية المحفوظة (Persona) إن وجدت
-        saved_persona = char_record.get("persona", "")
-        saved_custom = char_record.get("persona_custom", "")
-        if saved_persona:
-            if saved_persona in CORE_PERSONAS:
-                self.current_persona = dict(CORE_PERSONAS[saved_persona])
-            else:
-                self.current_persona = {
-                    "type": "custom",
-                    "title": "Custom Unique Persona",
-                    "role": "Custom Persona",
-                    "action": "persona_custom",
-                    "guidelines": f"Custom player instructions: {saved_custom or saved_persona}",
-                    "custom_text": saved_custom or saved_persona,
-                    "intro_quote": "Understood CJ. I know my role.",
-                    "gta_subtitle": "~y~[PERSONA: CUSTOM]~w~ Custom Personality Active!"
-                }
+        # ضمان بداية نقية لكل تجنيد جديد كمرافق طبيعي دون وراثة أي أدوار متراكمة
+        self.current_persona = None
+        self.current_mode = "companion"
+        self.session_memories.clear()
 
         self.current_identity = {
             "name": name,
@@ -113,15 +108,22 @@ class LLMBrain:
         return self.current_identity
 
     def set_custom_persona(self, model_id: int, persona_data: Dict[str, Any]) -> str:
-        """تحديث وحفظ شخصية الـ NPC وتوجيهاته بشكل فوري ودائم"""
-        self.current_persona = persona_data
+        """تحديث وحفظ شخصية الـ NPC وتوجيهاته بشكل فوري للجلسة الحالية"""
         p_type = persona_data.get("type", "custom")
+        if p_type in ["companion", "reset", "none"]:
+            self.current_persona = None
+            self.current_mode = "companion"
+            self.db.update_character_persona(model_id, "", "")
+            name = self.current_identity["name"] if self.current_identity else "Companion"
+            return persona_data.get("intro_quote", "Alright CJ, back to normal.")
+
+        self.current_persona = persona_data
         c_text = persona_data.get("custom_text", "")
         self.db.update_character_persona(model_id, p_type, c_text)
 
-        # تسجيل الموقف في قاعدة الذكريات الدائمة
+        # تسجيل الموقف في قاعدة الذكريات
         name = self.current_identity["name"] if self.current_identity else "Companion"
-        self.db.record_memory(name, "persona_change", f"CJ assigned me the role: {persona_data['title']}", "San Andreas", emotional_impact=0.15)
+        self.db.record_memory(name, "persona_change", f"Role assigned: {persona_data['title']}", "San Andreas", emotional_impact=0.15)
         return persona_data.get("intro_quote", "Ready CJ.")
 
     def generate_response(self, context: Dict[str, Any], trigger_type: str, user_prompt: Optional[str] = None) -> Tuple[str, str, str]:
@@ -189,12 +191,17 @@ class LLMBrain:
         radio_str = context.get("radio_station", "Radio Off")
         threat_str = context.get("threat_state", "Clear (No Threats)")
 
-        # استرجاع الذكريات الحديثة ومستوى الثقة من SQLite
-        recent_mems = self.db.get_recent_memories(npc_name, limit=3)
+        # استرجاع الذكريات الحديثة ومستوى الثقة من SQLite مع فلترة الدور النشط لعزل تام
+        active_p_type = self.current_persona.get("type") if self.current_persona else None
+        recent_mems = self.db.get_recent_memories(npc_name, limit=3, persona_filter=active_p_type)
         char_status = self.db.get_character_status(npc_name)
         trust_pct = int(char_status.get("trust_score", 0.5) * 100)
 
-        memories_text = "\n".join([f"  * {m}" for m in recent_mems]) if recent_mems else "  * None yet (we just met)."
+        all_mems = list(recent_mems)
+        if self.session_memories:
+            all_mems.extend(self.session_memories[-2:])
+
+        memories_text = "\n".join([f"  * {m}" for m in all_mems]) if all_mems else "  * None yet (we just met)."
 
         world_state = (
             f"Location: {zone} | Time: {time_str} | Weather: {weather_str} | Car Radio: {radio_str} | "
@@ -348,6 +355,10 @@ class LLMBrain:
                 say_clean = say.encode("ascii", errors="ignore").decode("ascii").strip()
                 if not say_clean:
                     say_clean = say[:70]
+
+                if user_prompt:
+                    self.session_memories.append(f"CJ: \"{user_prompt}\" -> You: \"{say_clean}\"")
+                    self.session_memories = self.session_memories[-6:]
 
                 return (say_clean, action, self.current_mode)
 
