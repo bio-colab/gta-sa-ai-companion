@@ -4,12 +4,13 @@
 # ====================================================================
 
 import os
+import re
 import json
 import time
 import random
 import urllib.request
 import urllib.error
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple, List
 try:
     from AINPC.memory_db import MemoryDB
 except ImportError:
@@ -20,6 +21,28 @@ except ImportError:
     from ped_demographics import PedDemographicsEngine, CORE_PERSONAS, resolve_persona_input
 
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+def has_intent_word(text: str, keywords: list) -> bool:
+    """فحص نية اللاعب بدقة حدود الكلمات (Regex Word Boundaries) لمنع المطابقة الجزئية الخاطئة مثل car في care"""
+    if not text:
+        return False
+    text_lower = text.lower()
+    for kw in keywords:
+        kw_lower = kw.lower()
+        if kw_lower.isascii() and kw_lower.isalnum():
+            # حدود الكلمات الإنجليزية بدقة تمنع مطابقة care مع car أو begun مع gun
+            if re.search(r'\b' + re.escape(kw_lower) + r'\b', text_lower):
+                return True
+        elif " " in kw_lower:
+            # عبارات متعددة الكلمات
+            if kw_lower in text_lower:
+                return True
+        else:
+            # حدود الكلمات العربية والعلامات
+            pattern = r'(?:^|\s|[.,!؟])' + re.escape(kw_lower) + r'(?:$|\s|[.,!؟])'
+            if re.search(pattern, text_lower):
+                return True
+    return False
 
 def load_env() -> Dict[str, str]:
     env = {}
@@ -89,9 +112,19 @@ class LLMBrain:
         # تسجيل أو استرجاع سجل الشخصية من قاعدة البيانات
         char_record = self.db.get_or_register_character(model_id, name, archetype)
 
-        # ضمان بداية نقية لكل تجنيد جديد كمرافق طبيعي دون وراثة أي أدوار متراكمة
-        self.current_persona = None
-        self.current_mode = "companion"
+        # استرجاع الشخصية المحفوظة للموديل إن وجدت في قاعدة البيانات، وإلا companion
+        saved_persona = char_record.get("persona", "")
+        saved_custom = char_record.get("persona_custom", "")
+        if saved_persona and saved_persona in CORE_PERSONAS:
+            p_data = dict(CORE_PERSONAS[saved_persona])
+            if saved_custom:
+                p_data["guidelines"] = f"{p_data['guidelines']} (Custom: {saved_custom})"
+            self.current_persona = p_data
+            self.current_mode = p_data.get("default_mode", "companion")
+        else:
+            self.current_persona = None
+            self.current_mode = "companion"
+
         self.session_memories.clear()
 
         self.current_identity = {
@@ -106,6 +139,39 @@ class LLMBrain:
             "times_recruited": char_record.get("times_recruited", 1)
         }
         return self.current_identity
+
+    def record_trust_event(self, delta: float, reason: str = "") -> float:
+        """تحديث رصيد الثقة للشخصية الحالية فور وقوع أحداث مؤثرة (مثل القيادة المتهورة أو الإنقاذ)"""
+        if self.current_identity:
+            npc_name = self.current_identity.get("name")
+            if npc_name:
+                new_t = self.db.update_trust(npc_name, delta)
+                self.current_identity["trust_score"] = new_t
+                return new_t
+        return 0.5
+
+    def get_current_trust(self) -> float:
+        if self.current_identity:
+            return float(self.current_identity.get("trust_score", 0.5))
+        return 0.5
+
+    def get_current_bravery(self) -> float:
+        if self.current_persona:
+            return float(self.current_persona.get("bravery", 0.7))
+        return 0.5
+
+    def _get_fallback_speech(self) -> str:
+        """جملة طبيعية من روح الشخصية في حال حدوث أي خطأ في الاتصال بالـ API لمنع ظهور أخطاء تقنية في اللعبة"""
+        p_type = (self.current_persona.get("type") if self.current_persona else "companion")
+        fallbacks = {
+            "hitman": "Comms glitch. Keep your eyes on the street, CJ.",
+            "heavy": "My ears are ringing from the blast, CJ! Say that again?",
+            "driver": "Watching the road, CJ! What did you say?",
+            "medic": "Checking medical supplies right now, CJ. Say again?",
+            "girlfriend": "Sorry handsome, I zoned out looking at you. What's up?",
+            "companion": "Yo CJ, my mind drifted for a second. What's the plan?"
+        }
+        return fallbacks.get(p_type, "Yo CJ, say that again?")
 
     def set_custom_persona(self, model_id: int, persona_data: Dict[str, Any]) -> str:
         """تحديث وحفظ شخصية الـ NPC وتوجيهاته بشكل فوري للجلسة الحالية"""
@@ -142,27 +208,27 @@ class LLMBrain:
         npc_dist = context.get("npc_dist", 2.0)
         npc_model = context.get("npc_model", 107)
 
-        # فحص إشارات تبديل المود التلقائية من كلام اللاعب
+        # فحص إشارات تبديل المود التلقائية من كلام اللاعب بمطابقة دقيقة للكلمات (Regex Word Boundaries)
         prompt_lower = (user_prompt or "").lower()
-        if any(k in prompt_lower for k in [
+        if has_intent_word(prompt_lower, [
             "ارقص", "رقص", "دانس", "dance", "دخن", "تدخين", "smoke", "سكر", "سكران", "drunk", "تغزل", "flirt", "صفق", "تصفيق", "cheer",
             "مود المشاعر", "وضع المشاعر", "مود الرقص", "وضع الرقص", "مود السكر", "فعّل المشاعر",
             "emote mode", "social mode", "chill mode", "dance mode", "party mode", "activate emote", "switch to emote"
         ]):
             self.current_mode = "emote"
-        elif any(k in prompt_lower for k in [
+        elif has_intent_word(prompt_lower, [
             "سلاح", "اسلحة", "مسدس", "رشاش", "بندقية", "شوتجن", "قاتل", "احميني", "احمي", "اطلق", "حرب", "درايف باي", "دافع",
             "مود القتال", "وضع القتال", "استعد للحرب", "جهّز السلاح", "اطلق النار", "اطلق من النافذة",
             "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "shoot out", "open fire", "gun", "weapon", "shoot", "fight", "protect", "kill"
         ]):
             self.current_mode = "combat"
-        elif any(k in prompt_lower for k in [
+        elif has_intent_word(prompt_lower, [
             "سيارة", "السيارة", "جيب سيارة", "احضر سيارة", "سرق سيارة", "سوق", "قد السيارة", "اركب السيارة", "اركبي", "انزل من السيارة",
             "مود القيادة", "وضع القيادة", "جلب السيارة",
             "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive me", "car", "drive", "exit car"
         ]):
             self.current_mode = "vehicle"
-        elif any(k in prompt_lower for k in [
+        elif has_intent_word(prompt_lower, [
             "الوضع العادي", "مود المرافقة", "اتبعني", "الحقني", "تعال", "ارجع", "قف", "توقف", "اثبت", "إلغاء",
             "normal mode", "companion mode", "follow me", "follow", "stop", "cancel", "regroup", "come back", "wait", "stay"
         ]):
@@ -273,13 +339,13 @@ class LLMBrain:
 
         if user_prompt:
             user_content = f"Current Game State: [{world_state}]\nCJ says to you: \"{user_prompt}\"\nRespond now as JSON:"
-            # تسجيل المحادثة في الذاكرة
-            self.db.record_memory(npc_name, "dialogue", f"CJ spoke with me: \"{user_prompt[:40]}\"", zone, emotional_impact=0.05)
+            # تسجيل المحادثة في الذاكرة بأثر متوازن
+            self.db.record_memory(npc_name, "dialogue", f"CJ spoke with me: \"{user_prompt[:40]}\"", zone, emotional_impact=0.01)
         else:
             event_desc = context.get("event_desc", "Observing the situation")
             user_content = f"Current Game State: [{world_state}]\nEvent Occurred: {event_desc}\nReact briefly as JSON:"
-            # تسجيل الحدث البارز في الذاكرة
-            self.db.record_memory(npc_name, "event", event_desc, zone, emotional_impact=0.1 if "joined" in event_desc else 0.0)
+            # تسجيل الحدث البارز في الذاكرة بأثر متوازن
+            self.db.record_memory(npc_name, "event", event_desc, zone, emotional_impact=0.03 if "joined" in event_desc else 0.0)
 
         payload = {
             "model": self.model,
@@ -293,80 +359,91 @@ class LLMBrain:
         }
 
         start_t = time.time()
-        try:
-            req = urllib.request.Request(
-                self.endpoint,
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                    "User-Agent": "GTA-SA-AI-NPC/3.0"
-                },
-                method="POST"
-            )
+        max_retries = 2
+        for attempt in range(max_retries + 1):
+            try:
+                req = urllib.request.Request(
+                    self.endpoint,
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                        "User-Agent": "GTA-SA-AI-NPC/3.0"
+                    },
+                    method="POST"
+                )
 
-            with urllib.request.urlopen(req, timeout=5.0) as resp:
-                self.last_response_time = (time.time() - start_t) * 1000
-                data = json.loads(resp.read().decode("utf-8"))
-                content = data["choices"][0]["message"]["content"].strip()
+                with urllib.request.urlopen(req, timeout=6.0) as resp:
+                    self.last_response_time = (time.time() - start_t) * 1000
+                    data = json.loads(resp.read().decode("utf-8"))
+                    content = data["choices"][0]["message"]["content"].strip()
 
-                parsed = json.loads(content)
-                say = str(parsed.get("say", "")).strip()
-                action = str(parsed.get("action", "none")).strip().lower()
-                new_mode = str(parsed.get("new_mode", "")).strip().lower()
+                    parsed = json.loads(content)
+                    say = str(parsed.get("say", "")).strip()
+                    action = str(parsed.get("action", "none")).strip().lower()
+                    new_mode = str(parsed.get("new_mode", "")).strip().lower()
 
-                if new_mode in VALID_MODES:
-                    self.current_mode = new_mode
+                    if new_mode in VALID_MODES:
+                        self.current_mode = new_mode
 
-                allowed_actions = MODE_ACTIONS.get(self.current_mode, MODE_ACTIONS["companion"])
-                if action not in allowed_actions and action != "follow_player":
-                    # إذا اختار النموذج حركة تنتمي لمود آخر، بدّل المود تلقائياً للسماح بها فوراً
-                    for mode_name, mode_act_list in MODE_ACTIONS.items():
-                        if action in mode_act_list:
-                            self.current_mode = mode_name
-                            allowed_actions = mode_act_list
-                            break
-                    else:
-                        action = "none"
+                    allowed_actions = MODE_ACTIONS.get(self.current_mode, MODE_ACTIONS["companion"])
+                    if action not in allowed_actions and action != "follow_player":
+                        for mode_name, mode_act_list in MODE_ACTIONS.items():
+                            if action in mode_act_list:
+                                self.current_mode = mode_name
+                                allowed_actions = mode_act_list
+                                break
+                        else:
+                            action = "none"
 
-                # تسجيل ذكريات الأكشن في قاعدة الذاكرة الدائمة
-                if action.startswith("arm_"):
-                    gun_name = action.replace("arm_", "").upper()
-                    self.db.record_memory(npc_name, "combat", f"Equipped {gun_name} to fight alongside CJ", zone, emotional_impact=0.1)
-                elif action == "fetch_car":
-                    self.db.record_memory(npc_name, "vehicle", "Stealing and fetching a car for CJ", zone, emotional_impact=0.08)
-                elif action in ["drive_wander", "drive_to_target"]:
-                    self.db.record_memory(npc_name, "vehicle", "Chauffeuring CJ across San Andreas", zone, emotional_impact=0.05)
-                elif action == "follow_player":
-                    self.db.record_memory(npc_name, "companion", "Regrouped and followed CJ", zone, emotional_impact=0.03)
-                elif action == "dance":
-                    self.db.record_memory(npc_name, "social", "Danced with CJ", zone, emotional_impact=0.04)
-                elif action in ["strip", "lapdance"]:
-                    self.db.record_memory(npc_name, "romance", "Performed an intimate dance for CJ", zone, emotional_impact=0.1)
-                elif action in ["flirt", "kiss", "cuddle"]:
-                    self.db.record_memory(npc_name, "romance", "Exchanged affection with CJ", zone, emotional_impact=0.1)
-                elif action == "act_drunk":
-                    self.db.record_memory(npc_name, "social", "Drank and acted tipsy with CJ", zone, emotional_impact=0.04)
-                elif action == "driveby":
-                    self.db.record_memory(npc_name, "combat", "Fired out car window in high-speed drive-by shootout", zone, emotional_impact=0.15)
-                elif action == "attack_threat":
-                    self.db.record_memory(npc_name, "combat", "Defended CJ against hostile attacker on foot", zone, emotional_impact=0.12)
+                    # تسجيل ذكريات الأكشن بأثر عاطفي متوازن ومنطقي
+                    if action.startswith("arm_"):
+                        gun_name = action.replace("arm_", "").upper()
+                        self.db.record_memory(npc_name, "combat", f"Equipped {gun_name} to fight alongside CJ", zone, emotional_impact=0.02)
+                    elif action == "fetch_car":
+                        self.db.record_memory(npc_name, "vehicle", "Stealing and fetching a car for CJ", zone, emotional_impact=0.03)
+                    elif action in ["drive_wander", "drive_to_target"]:
+                        self.db.record_memory(npc_name, "vehicle", "Chauffeuring CJ across San Andreas", zone, emotional_impact=0.02)
+                    elif action == "follow_player":
+                        self.db.record_memory(npc_name, "companion", "Regrouped and followed CJ", zone, emotional_impact=0.01)
+                    elif action == "dance":
+                        self.db.record_memory(npc_name, "social", "Danced with CJ", zone, emotional_impact=0.02)
+                    elif action in ["strip", "lapdance"]:
+                        self.db.record_memory(npc_name, "romance", "Performed an intimate dance for CJ", zone, emotional_impact=0.03)
+                    elif action in ["flirt", "kiss", "cuddle"]:
+                        self.db.record_memory(npc_name, "romance", "Exchanged affection with CJ", zone, emotional_impact=0.03)
+                    elif action == "act_drunk":
+                        self.db.record_memory(npc_name, "social", "Drank and acted tipsy with CJ", zone, emotional_impact=0.01)
+                    elif action == "driveby":
+                        self.db.record_memory(npc_name, "combat", "Fired out car window in high-speed drive-by shootout", zone, emotional_impact=0.04)
+                    elif action == "attack_threat":
+                        self.db.record_memory(npc_name, "combat", "Defended CJ against hostile attacker on foot", zone, emotional_impact=0.04)
 
-                say_clean = say.encode("ascii", errors="ignore").decode("ascii").strip()
-                if not say_clean:
-                    say_clean = say[:70]
+                    say_clean = say.encode("ascii", errors="ignore").decode("ascii").strip()
+                    if not say_clean:
+                        say_clean = say[:70]
 
-                if user_prompt:
-                    self.session_memories.append(f"CJ: \"{user_prompt}\" -> You: \"{say_clean}\"")
-                    self.session_memories = self.session_memories[-6:]
+                    if user_prompt:
+                        self.session_memories.append(f"CJ: \"{user_prompt}\" -> You: \"{say_clean}\"")
+                        self.session_memories = self.session_memories[-6:]
 
-                return (say_clean, action, self.current_mode)
+                    return (say_clean, action, self.current_mode)
 
-        except urllib.error.HTTPError as e:
-            err_body = e.read().decode("utf-8", errors="replace")
-            return (f"API Error: HTTP {e.code}", "none", self.current_mode)
-        except Exception as e:
-            return (f"Brain Error: {str(e)[:40]}", "none", self.current_mode)
+            except urllib.error.HTTPError as e:
+                err_body = e.read().decode("utf-8", errors="replace")
+                print(f"[LLM API ERROR] HTTP {e.code} (Attempt {attempt+1}/{max_retries+1}): {err_body[:100]}", file=sys.stderr)
+                if e.code in [429, 500, 502, 503, 504] and attempt < max_retries:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                fallback = self._get_fallback_speech()
+                return (fallback, "none", self.current_mode)
+            except Exception as e:
+                print(f"[LLM NET ERROR] {e} (Attempt {attempt+1}/{max_retries+1})", file=sys.stderr)
+                if attempt < max_retries:
+                    time.sleep(1.0 * (attempt + 1))
+                    continue
+                fallback = self._get_fallback_speech()
+                return (fallback, "none", self.current_mode)
 
 if __name__ == "__main__":
     brain = LLMBrain()

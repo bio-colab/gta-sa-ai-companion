@@ -16,20 +16,34 @@ from ped_demographics import resolve_persona_input, CORE_PERSONAS
 
 # توافق مع Windows Console
 if sys.platform == "win32":
+    import ctypes
+    _kernel32 = ctypes.windll.kernel32
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     except Exception:
         pass
+else:
+    _kernel32 = None
 
-def is_gta_running() -> bool:
-    """فحص ما إذا كانت عملية لعبة GTA San Andreas مشغلة حالياً لمنع قراءة بيانات قديمة"""
+_last_gta_check_time = 0.0
+_cached_gta_running = False
+
+def is_gta_running(cache_ttl: float = 1.5) -> bool:
+    """فحص ما إذا كانت عملية لعبة GTA San Andreas مشغلة حالياً مع تخزين مؤقت لتقليل استهلاك المعالج"""
+    global _last_gta_check_time, _cached_gta_running
+    now = time.time()
+    if now - _last_gta_check_time < cache_ttl:
+        return _cached_gta_running
+    _last_gta_check_time = now
     try:
         for p in psutil.process_iter(['name']):
             p_name = p.info.get('name')
             if p_name and p_name.lower() in ['gta_sa.exe', 'gta-sa.exe', 'gta_sa']:
+                _cached_gta_running = True
                 return True
     except Exception:
         pass
+    _cached_gta_running = False
     return False
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -110,14 +124,23 @@ from poi_manager import get_spatial_brief, resolve_zone_name
 
 class SafeIniManager:
     def __init__(self, path: str):
-        self.path = path
+        self.path = os.path.abspath(path)
         self.data = {}
         self.lock = threading.Lock()
+        self._last_mtime = 0.0
 
-    def reload(self) -> bool:
-        """قراءة آمنة مع إعادة المحاولة لتفادي قفل الملف اللحظي بواسطة ويندوز أو اللعبة"""
+    def reload(self, force: bool = False) -> bool:
+        """قراءة آمنة مع فحص تاريخ التعديل لتفادي استهلاك المعالج وإعادة المحاولة عند قفل الملف"""
         if not os.path.exists(self.path):
             return False
+
+        try:
+            mtime = os.path.getmtime(self.path)
+            if not force and mtime == self._last_mtime and self.data:
+                return True
+            self._last_mtime = mtime
+        except OSError:
+            pass
 
         for _ in range(3):
             try:
@@ -177,7 +200,16 @@ class SafeIniManager:
             return default
 
     def update_bridge_section(self, bridge_dict: dict) -> bool:
-        """تحديث قسم BRIDGE فقط مع الحفاظ التام 100% على أسطر قسم GAME التي كتبتها اللعبة"""
+        """تحديث قسم BRIDGE فقط حصرياً عبر Windows Native API الذرية دون لمس أسطر GAME أو إعادة كتابة الملف"""
+        if _kernel32 is not None:
+            try:
+                for k, v in bridge_dict.items():
+                    _kernel32.WritePrivateProfileStringW("BRIDGE", str(k), str(v), self.path)
+                return True
+            except Exception:
+                pass
+
+        # Fallback لأنظمة غير ويندوز
         for _ in range(5):
             try:
                 game_lines = []
@@ -252,8 +284,10 @@ class SafeIniManager:
 ini = SafeIniManager(INI_PATH)
 say_counter = 0
 action_counter = 0
-pending_say = None
-pending_action = None
+say_fifo = queue.Queue()
+action_fifo = queue.Queue()
+in_flight_say = None     # (say_id, text, sent_time)
+in_flight_action = None  # (action_id, cmd, sent_time)
 command_lock = threading.Lock()
 
 bridge_state = {
@@ -264,7 +298,9 @@ bridge_state = {
     "action_id": "0",
     "action_cmd": "",
     "active_mode": "companion",
-    "active_persona": "companion"
+    "active_persona": "companion",
+    "trust_level": "0.50",
+    "bravery": "0.50"
 }
 
 llm_queue = queue.Queue()
@@ -307,6 +343,8 @@ def apply_persona_command(user_text: str) -> bool:
         if p_type in ["companion", "reset", "none"]:
             bridge_state["active_persona"] = ""
             bridge_state["active_mode"] = "companion"
+            bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
+            bridge_state["bravery"] = f"{brain.get_current_bravery():.2f}"
             ini.update_bridge_section(bridge_state)
             queue_say(f"{persona_info['gta_subtitle']}~n~~y~{npc_name}:~w~ {intro_quote}")
             queue_action("persona_companion")
@@ -314,6 +352,8 @@ def apply_persona_command(user_text: str) -> bool:
             return True
 
         bridge_state["active_persona"] = p_type
+        bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
+        bridge_state["bravery"] = f"{brain.get_current_bravery():.2f}"
         ini.update_bridge_section(bridge_state)
 
         # إرسال إشعار للشاشة وتفعيل قدرات السكريبت فوراً
@@ -329,18 +369,20 @@ def apply_persona_command(user_text: str) -> bool:
         return False
 
 def queue_say(text: str):
-    global say_counter, pending_say
+    global say_counter
     with command_lock:
         say_counter += 1
-        pending_say = (say_counter, text)
-    log(f"[QUEUED SUBTITLE #{say_counter}] \"{text}\"")
+        sid = say_counter
+        say_fifo.put((sid, text))
+    log(f"[QUEUED SUBTITLE #{sid}] \"{text}\"")
 
 def queue_action(cmd: str):
-    global action_counter, pending_action
+    global action_counter
     with command_lock:
         action_counter += 1
-        pending_action = (action_counter, cmd)
-    log(f"[QUEUED ACTION #{action_counter}] Command: {cmd}")
+        aid = action_counter
+        action_fifo.put((aid, cmd))
+    log(f"[QUEUED ACTION #{aid}] Command: {cmd}")
 
 def llm_worker():
     """خيط خلفي لمعالجة طلبات الذكاء الاصطناعي دون إيقاف نبض الاتصال"""
@@ -360,10 +402,12 @@ def llm_worker():
 
             log(f"[LLM BRAIN ({latency:.0f}ms)] Responded: \"{say_text}\" | Action: {action_cmd} | Mode: [{active_mode.upper()}]")
 
+            bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
+            bridge_state["bravery"] = f"{brain.get_current_bravery():.2f}"
             if active_mode and active_mode != bridge_state.get("active_mode"):
                 bridge_state["active_mode"] = active_mode
-                ini.update_bridge_section(bridge_state)
                 log(f"[MODE TRANSITION] Active mode transitioned to: [{active_mode.upper()}]")
+            ini.update_bridge_section(bridge_state)
 
             if say_text:
                 disp_name = brain.current_identity["name"] if brain.current_identity else "AI NPC"
@@ -580,7 +624,7 @@ def input_thread_func():
             break
 
 def main():
-    global pending_say, pending_action, latest_game_context, bridge_state, say_counter, action_counter
+    global say_fifo, action_fifo, in_flight_say, in_flight_action, latest_game_context, bridge_state, say_counter, action_counter
 
     log("====================================================================")
     log("   GTA San Andreas AI NPC - Bridge (Phase 2.5 Voice-In / Text-Out)  ")
@@ -756,23 +800,6 @@ def main():
                         except Exception as e:
                             log(f"[TEXT CMD ERROR] Error processing in-game command: {e}")
 
-                # =========================================================
-                # 5. إرسال الحوارات والأوامر
-                # =========================================================
-                with command_lock:
-                    if pending_say or pending_action:
-                        if pending_say:
-                            sid, stext = pending_say
-                            bridge_state["say_id"] = str(sid)
-                            bridge_state["say_text"] = stext
-                            pending_say = None
-                        if pending_action:
-                            aid, acmd = pending_action
-                            bridge_state["action_id"] = str(aid)
-                            bridge_state["action_cmd"] = acmd
-                            pending_action = None
-                        ini.update_bridge_section(bridge_state)
-
                 # فحص تأكيد استلام اللعبة (Acks)
                 game_say_ack = ini.get_int("GAME", "say_ack", 0)
                 if game_say_ack > last_seen_say_ack:
@@ -783,6 +810,35 @@ def main():
                 if game_action_ack > last_seen_action_ack:
                     last_seen_action_ack = game_action_ack
                     log(f"  [ACK CONFIRMED] Action #{game_action_ack} executed by NPC!")
+
+                # تحرير الحزم الحالية إذا أكدتها اللعبة أو مر عليها أكثر من 5 ثوان كأمان
+                if in_flight_say and (game_say_ack >= in_flight_say[0] or (now - in_flight_say[2] > 5.0)):
+                    in_flight_say = None
+
+                if in_flight_action and (game_action_ack >= in_flight_action[0] or (now - in_flight_action[2] > 5.0)):
+                    in_flight_action = None
+
+                # =========================================================
+                # 5. إرسال الحوارات والأوامر من طوابير FIFO بالتتابع المؤكد
+                # =========================================================
+                need_bridge_sync = False
+                with command_lock:
+                    if in_flight_say is None and not say_fifo.empty():
+                        sid, stext = say_fifo.get()
+                        in_flight_say = (sid, stext, now)
+                        bridge_state["say_id"] = str(sid)
+                        bridge_state["say_text"] = stext
+                        need_bridge_sync = True
+
+                    if in_flight_action is None and not action_fifo.empty():
+                        aid, acmd = action_fifo.get()
+                        in_flight_action = (aid, acmd, now)
+                        bridge_state["action_id"] = str(aid)
+                        bridge_state["action_cmd"] = acmd
+                        need_bridge_sync = True
+
+                if need_bridge_sync:
+                    ini.update_bridge_section(bridge_state)
 
                 # =========================================================
                 # 6. استخراج التيليميتري وتحليل الأحداث الحية للذكاء الاصطناعي
@@ -853,16 +909,23 @@ def main():
                     # محرك كشف الأحداث الذكي والمحمي من استنزاف الـ API
                     if npc_active == 1:
                         if prev_npc_active == 0:
-                            # تجنيد رفيق جديد: تنظيف وضمان بداية نقية بدون أي شخصية متوارثة
-                            log("====================================================================")
-                            log(f"  [NEW COMPANION RECRUITED] Model #{npc_model} joined CJ.")
-                            log("  [CLEAN SLATE] Initializing fresh companion session (No Persona Bleed).")
-                            log("====================================================================")
+                            # تجنيد رفيق جديد: استرجاع الشخصية المحفوظة للموديل إن وجدت وإلا رفيق عادي
                             brain.reset_session()
-                            brain.get_or_create_identity(npc_model)
-                            bridge_state["active_persona"] = ""
-                            bridge_state["active_mode"] = "companion"
+                            identity = brain.get_or_create_identity(npc_model)
+                            active_p = brain.current_persona.get("type", "") if brain.current_persona else ""
+                            bridge_state["active_persona"] = active_p
+                            bridge_state["active_mode"] = brain.current_mode
+                            bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
+                            bridge_state["bravery"] = f"{brain.get_current_bravery():.2f}"
                             ini.update_bridge_section(bridge_state)
+
+                            log("====================================================================")
+                            log(f"  [NEW COMPANION RECRUITED] {identity['name']} (Model #{npc_model}) joined CJ.")
+                            if active_p:
+                                log(f"  [SAVED PERSONA RESTORED] Resumed active role: [{active_p.upper()}] (Trust: {brain.get_current_trust()*100:.0f}%)")
+                            else:
+                                log("  [CLEAN SLATE] Initialized fresh companion session (Default Companion).")
+                            log("====================================================================")
                             trigger_llm_event(latest_game_context, f"I just joined CJ as a companion here in {zone_name}!")
                         elif threat_active == 1 and prev_threat_active == 0:
                             # تبديل المود إلى القتال محلياً دون استهلاك الـ API
@@ -871,9 +934,26 @@ def main():
                             log("[LOCAL TACTICS] Hostile threat engaged by squad locally (0 API Calls).")
                         elif threat_active == 0 and prev_threat_active == 1:
                             log("[LOCAL TACTICS] Threat neutralized by squad locally (0 API Calls).")
-                        elif car_crashed == 1 and (now - last_crash_comment_time > 10.0):
+                        elif car_crashed == 1 and crash_severity >= 50 and (now - last_crash_comment_time > 8.0):
                             last_crash_comment_time = now
-                            log(f"[LOCAL EVENT] Car collision detected (Damage: {crash_severity} HP).")
+                            # تعديل رصيد الثقة سلباً بسبب تعريض حياة المرافق للخطر
+                            brain.record_trust_event(-0.04, f"Violent car crash with CJ ({crash_severity} damage)")
+                            bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
+                            ini.update_bridge_section(bridge_state)
+                            log(f"[LOCAL EVENT] Car collision detected (Damage: {crash_severity} HP). Trust adjusted to {brain.get_current_trust():.2f}.")
+                            trigger_llm_event(latest_game_context, f"CJ just crashed the vehicle violently (Severity: {crash_severity} HP damage)! React in shock or anger at his reckless driving!")
+                        elif cj_in_car and car_radio != prev_car_radio and prev_car_radio is not None and (now - last_radio_comment_time > 30.0):
+                            last_radio_comment_time = now
+                            station_info = RADIO_STATIONS.get(car_radio, {"name": "Radio", "genre": "Music"})
+                            st_name = station_info.get("name", "Radio")
+                            st_genre = station_info.get("genre", "music")
+                            if car_radio in [-1, 12]:
+                                trigger_llm_event(latest_game_context, "CJ just turned off the car radio. We are driving in quiet.")
+                            else:
+                                trigger_llm_event(latest_game_context, f"CJ changed the radio station to {st_name} ({st_genre}).")
+                        elif (now - last_ambient_comment_time > 90.0) and threat_active == 0 and not cj_in_car and (now - last_autonomous_event_time > 45.0):
+                            last_ambient_comment_time = now
+                            trigger_llm_event(latest_game_context, f"We are casually walking together in {zone_name} during {time_period}. Make a brief, natural street remark about our surroundings.")
                         elif prev_cj_wanted is not None and cj_wanted > prev_cj_wanted and cj_wanted >= 2:
                             if brain.current_mode == "emote":
                                 set_active_mode("combat")
@@ -886,6 +966,8 @@ def main():
                         brain.reset_session()
                         bridge_state["active_persona"] = ""
                         bridge_state["active_mode"] = "companion"
+                        bridge_state["trust_level"] = "0.50"
+                        bridge_state["bravery"] = "0.50"
                         ini.update_bridge_section(bridge_state)
 
                     prev_cj_weapon = cj_weapon
@@ -898,14 +980,15 @@ def main():
                     prev_hour_period = time_period
                     prev_weather_id = weather_id
 
-                    # عرض شاشة الـ Telemetry الحية
-                    current_snapshot = format_telemetry(ini)
-                    if current_snapshot != last_telemetry_snapshot or (now - last_telemetry_print_time > 2.0):
-                        last_telemetry_snapshot = current_snapshot
+                    # عرض شاشة الـ Telemetry الحية بترشيد لحفظ موارد المعالج
+                    if now - last_telemetry_print_time > 2.0:
                         last_telemetry_print_time = now
-                        print("-" * 68, flush=True)
-                        print(f"[{datetime.now().strftime('%H:%M:%S')}] LIVE TELEMETRY STREAM:", flush=True)
-                        print(current_snapshot, flush=True)
+                        current_snapshot = format_telemetry(ini)
+                        if current_snapshot != last_telemetry_snapshot:
+                            last_telemetry_snapshot = current_snapshot
+                            print("-" * 68, flush=True)
+                            print(f"[{datetime.now().strftime('%H:%M:%S')}] LIVE TELEMETRY STREAM:", flush=True)
+                            print(current_snapshot, flush=True)
                 except Exception:
                     pass
 

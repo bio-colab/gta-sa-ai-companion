@@ -111,19 +111,25 @@ class MemoryDB:
                 # البحث الثابت بـ model_id لضمان استمرارية الذاكرة عبر الجلسات
                 cursor.execute("SELECT * FROM characters WHERE model_id = ?", (model_id,))
                 row = cursor.fetchone()
-
                 if row:
-                    # تحديث تاريخ آخر ظهور وعدد مرات التجنيد للشخصية الدائمة
+                    # تضاؤل الثقة الطبيعي التدريجي نحو خط الأساس (Natural Trust Decay)
+                    current_trust = float(row["trust_score"] if row["trust_score"] is not None else 0.5)
+                    if current_trust > 0.5:
+                        current_trust = max(0.5, round(current_trust - 0.02, 2))
+                    elif current_trust < 0.5:
+                        current_trust = min(0.5, round(current_trust + 0.02, 2))
+
                     new_recruits = row["times_recruited"] + 1
                     cursor.execute("""
                     UPDATE characters 
-                    SET last_seen = ?, times_recruited = ? 
+                    SET last_seen = ?, times_recruited = ?, trust_score = ?
                     WHERE id = ?
-                    """, (now, new_recruits, row["id"]))
+                    """, (now, new_recruits, current_trust, row["id"]))
                     conn.commit()
                     updated = dict(row)
                     updated["times_recruited"] = new_recruits
                     updated["last_seen"] = now
+                    updated["trust_score"] = current_trust
                     return updated
                 else:
                     try:
@@ -194,11 +200,26 @@ class MemoryDB:
                 if emotional_impact != 0.0:
                     cursor.execute("""
                     UPDATE characters
-                    SET trust_score = MAX(0.0, MIN(1.0, trust_score + ?))
+                    SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
                     WHERE name = ?
                     """, (emotional_impact, character_name))
 
                 conn.commit()
+
+    def update_trust(self, character_name: str, delta: float) -> float:
+        """تعديل مقياس الثقة مباشرة (زيادة أو نقصان) وإرجاع القيمة المحدثة"""
+        with self.lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                UPDATE characters
+                SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
+                WHERE name = ?
+                """, (delta, character_name))
+                conn.commit()
+                cursor.execute("SELECT trust_score FROM characters WHERE name = ?", (character_name,))
+                row = cursor.fetchone()
+                return float(row["trust_score"]) if row and row["trust_score"] is not None else 0.5
 
     def clean_persona_clutter(self):
         """تنظيف الأدوار المتراكمة من الاختبارات السابقة لضمان بداية نقية لكل شخصية يتم تجنيدها"""

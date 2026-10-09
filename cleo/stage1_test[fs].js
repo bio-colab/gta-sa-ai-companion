@@ -32,6 +32,8 @@ let lastMedicHealTime = 0;
 let lastHeavyAlertTime = 0;
 let lastAutonomousActionTime = 0;
 let lastGirlfriendFlirtTime = 0;
+let companionTrust = 0.5;
+let companionBravery = 0.5;
 
 function isKeyJustPressedCustom(vk) {
     try {
@@ -398,6 +400,27 @@ while (true) {
                     }
                 }
             }
+
+            let trustStr = IniFile.ReadString(INI_FILE, "BRIDGE", "trust_level");
+            if (trustStr && trustStr.length > 0) {
+                let parsedTrust = parseFloat(trustStr);
+                if (!isNaN(parsedTrust)) {
+                    companionTrust = Math.max(0.0, Math.min(1.0, parsedTrust));
+                }
+            }
+
+            let braveryStr = IniFile.ReadString(INI_FILE, "BRIDGE", "bravery");
+            if (braveryStr && braveryStr.length > 0) {
+                let parsedBravery = parseFloat(braveryStr);
+                if (!isNaN(parsedBravery)) {
+                    companionBravery = Math.max(0.0, Math.min(1.0, parsedBravery));
+                }
+            }
+
+            let bridgePersona = IniFile.ReadString(INI_FILE, "BRIDGE", "active_persona");
+            if (bridgePersona && bridgePersona.length > 0 && bridgePersona !== currentNpcPersona) {
+                currentNpcPersona = bridgePersona.toLowerCase().trim();
+            }
         } catch (e) {
             // صامت لحماية اللعبة
         }
@@ -694,7 +717,7 @@ while (true) {
                                 } catch (_) {}
 
                                 if (target && target.x !== undefined && (target.x !== 0 || target.y !== 0)) {
-                                    let targetSpeed = (currentNpcPersona === "driver") ? 40.0 : 28.0;
+                                    let targetSpeed = (currentNpcPersona === "driver") ? (35.0 + companionTrust * 15.0) : (22.0 + companionTrust * 10.0);
                                     Task.CarDriveToCoord(activePed, curCar, target.x, target.y, target.z, targetSpeed, 0, 0, 2);
                                     Text.PrintStringNow(currentNpcPersona === "driver" ? "~b~[AI TRANSPORTER] High-speed pursuit to waypoint!~w~" : "~g~[AI CHAUFFEUR] En route to target waypoint!~w~", 4000);
                                     log(`[AI ACTION] Driving to waypoint at speed ${targetSpeed} (${target.x.toFixed(1)}, ${target.y.toFixed(1)}, ${target.z.toFixed(1)})`);
@@ -1003,17 +1026,20 @@ while (true) {
     // =========================================================
     if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
         // 1. قدرة المعالج الميداني (Medic Auto-Heal Passive)
-        if (currentNpcPersona === "medic" && (now - lastMedicHealTime > 20000)) {
+        let medicCooldown = Math.floor(25000 - companionTrust * 10000);
+        if (currentNpcPersona === "medic" && (now - lastMedicHealTime > medicCooldown)) {
             try {
                 let cjHp = playerChar.getHealth();
                 let npcHp = activePed.getHealth();
-                if (cjHp < 65 || npcHp < 50) {
+                let cjHealThreshold = Math.floor(45 + companionTrust * 35);
+                if (cjHp < cjHealThreshold || npcHp < 50) {
                     lastMedicHealTime = now;
                     playerChar.setHealth(100);
-                    playerChar.addArmor(50);
+                    let armorBonus = Math.floor(25 + companionTrust * 50);
+                    playerChar.addArmor(armorBonus);
                     activePed.setHealth(100);
-                    Text.PrintStringNow("~g~[MEDIC SUPPORT] First Aid applied! CJ & Squad healed.~w~", 3500);
-                    log("[AI MEDIC PASSIVE] Healed wounded player & squad.");
+                    Text.PrintStringNow(`~g~[MEDIC SUPPORT] First Aid applied! (Trust: ${Math.floor(companionTrust * 100)}%)~w~`, 3500);
+                    log(`[AI MEDIC PASSIVE] Healed wounded player & squad with trust scaling (Armor +${armorBonus}, Trust: ${(companionTrust * 100).toFixed(0)}%).`);
                 }
             } catch (_) {}
         }
@@ -1340,9 +1366,10 @@ while (true) {
                                 // السائق المحترف: الهروب السريع والتفادي التلقائي عند التعرض لهجوم
                                 if (now - lastDriveByTime > 3000) {
                                     lastDriveByTime = now;
-                                    Task.CarDriveWander(activePed, playerCar, 44.0, 2);
+                                    let escapeSpeed = 35.0 + companionTrust * 15.0;
+                                    Task.CarDriveWander(activePed, playerCar, escapeSpeed, 2);
                                     Text.PrintStringNow("~b~[TRANSPORTER] Evasive getaway maneuver initiated!~w~", 2500);
-                                    log("[AI DRIVER] Executing high-speed evasive getaway maneuver!");
+                                    log(`[AI DRIVER] Executing high-speed evasive getaway maneuver (Speed: ${escapeSpeed.toFixed(1)})!`);
                                 }
                             } else if (!isDriver) {
                                 // المرافق في المقعد الجانبي: إطلاق نار من النافذة (Drive-By)
@@ -1386,19 +1413,21 @@ while (true) {
                                     }
                                 }
                             }
-                            // ب. القاتل المحترف (Hitman): هجوم فتاك بدقة 100%
+                            // ب. القاتل المحترف (Hitman): هجوم فتاك بدقة استثنائية تتأثر بالثقة
                             else if (currentNpcPersona === "hitman") {
                                 let curWep = activePed.getCurrentWeapon();
                                 if (curWep === 0) {
                                     giveNpcWeapon(activePed, 31, 356, 800); // M4
                                 }
-                                activePed.setAccuracy(100);
-                                activePed.setShootRate(100);
+                                let hitmanAcc = Math.floor(80 + companionTrust * 20);
+                                let hitmanRate = Math.floor(80 + companionTrust * 20);
+                                activePed.setAccuracy(hitmanAcc);
+                                activePed.setShootRate(hitmanRate);
                                 if (now - lastDriveByTime > 3000) {
                                     lastDriveByTime = now;
                                     Task.KillCharOnFoot(activePed, threat);
-                                    Text.PrintStringNow("~r~[HITMAN] Target in sight! Eliminating hostile!~w~", 2500);
-                                    log("[AI HITMAN] Autonomous lethal headshot engagement!");
+                                    Text.PrintStringNow(`~r~[HITMAN] Target in sight! Eliminating hostile! (Acc: ${hitmanAcc}%)~w~`, 2500);
+                                    log(`[AI HITMAN] Autonomous lethal headshot engagement! (Accuracy: ${hitmanAcc}%)`);
                                 }
                             }
                             // ج. المعالج الميداني (Medic): دفاع محكم وحماية CJ
@@ -1407,11 +1436,13 @@ while (true) {
                                 if (curWep === 0) {
                                     giveNpcWeapon(activePed, 24, 348, 200); // Desert Eagle
                                 }
+                                let medAcc = Math.floor(40 + companionTrust * 30);
+                                activePed.setAccuracy(medAcc);
                                 if (now - lastDriveByTime > 4000) {
                                     lastDriveByTime = now;
                                     Task.KillCharOnFoot(activePed, threat);
                                     Text.PrintStringNow("~g~[FIELD MEDIC] Defensive cover fire! Stay back CJ!~w~", 2500);
-                                    log("[AI MEDIC] Defensive suppressive fire to protect player.");
+                                    log(`[AI MEDIC] Defensive suppressive fire to protect player (Accuracy: ${medAcc}%).`);
                                 }
                             }
                             // د. الحبيبة (Girlfriend): ذعر وتفادي خلف CJ
@@ -1423,17 +1454,21 @@ while (true) {
                                     log("[AI GIRLFRIEND] Emotional protective reaction during combat.");
                                 }
                             }
-                            // هـ. الوضع العادي (Companion): دفاع تقليدي
+                            // هـ. الوضع العادي (Companion): دفاع متدرج وفق مستوى الثقة والشجاعة
                             else {
                                 let curWep = activePed.getCurrentWeapon();
                                 if (curWep === 0) {
                                     giveNpcWeapon(activePed, 31, 356, 500); // M4
                                 }
+                                let compAcc = Math.floor(40 + companionTrust * 45);
+                                let compRate = Math.floor(35 + companionTrust * 45);
+                                activePed.setAccuracy(compAcc);
+                                activePed.setShootRate(compRate);
                                 if (now - lastDriveByTime > 4000) {
                                     lastDriveByTime = now;
                                     Task.KillCharOnFoot(activePed, threat);
-                                    Text.PrintStringNow("~r~[AI COMBAT] DEFENDING CJ! ENGAGING HOSTILE!~w~", 2500);
-                                    log("[AI COMBAT] Autonomous threat defense: engaging hostile on foot.");
+                                    Text.PrintStringNow(`~r~[AI COMBAT] DEFENDING CJ! (Trust: ${Math.floor(companionTrust * 100)}%)~w~`, 2500);
+                                    log(`[AI COMBAT] Autonomous threat defense: engaging on foot (Accuracy: ${compAcc}%, ShootRate: ${compRate}%).`);
                                 }
                             }
                         }
