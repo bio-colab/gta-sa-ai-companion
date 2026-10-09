@@ -27,6 +27,7 @@ let keyHeldStates = {};
 
 // متغيرات نظام الشخصيات والقدرات التكتيكية (Persona & Specialized Roles System)
 let currentNpcPersona = "companion";
+let activeMode = "companion";
 let lastMedicHealTime = 0;
 let lastHeavyAlertTime = 0;
 let lastAutonomousActionTime = 0;
@@ -718,7 +719,7 @@ while (true) {
                     actionCmd === "cheer" || actionCmd === "clap" || actionCmd === "hype" ||
                     actionCmd === "cower" || actionCmd === "scared" || actionCmd === "panic"
                 ) {
-                    let activeMode = "companion";
+                    activeMode = "companion";
                     try {
                         let modeVal = IniFile.ReadString(INI_FILE, "BRIDGE", "active_mode");
                         if (modeVal && modeVal.length > 0) {
