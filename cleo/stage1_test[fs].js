@@ -84,6 +84,12 @@ let lastCarHealth = 1000;
 let lastCrashTime = 0;
 let lastThreatCheck = 0;
 let currentThreatChar = null;
+let lastKilledThreat = null;
+let lastKilledTime = 0;
+let damageLedger = {};
+const DAMAGE_MEMORY_MS = 10000;
+let lastKnownCjHealth = 100;
+let lastKnownActivePedHealth = 100;
 let lastDriveByTime = 0;
 let activePedBlip = null;
 let currentBlipDisplay = -1;
@@ -249,9 +255,63 @@ function findNearbyHostileVehicle(centerX, centerY, centerZ, maxRadius) {
     return bestCar;
 }
 
+// فحص ما إذا كان الهدف قد هاجم اللاعب أو المرافق مؤخراً خلال نافذة الذاكرة (10 ثوانٍ) لمنع تراكم الضرر الأبدي
+function isRecentAttacker(ped, now, playerChar, activePed) {
+    if (!ped || !Char.DoesExist(ped)) return false;
+    let handle = 0;
+    try {
+        handle = ped.getHandle ? ped.getHandle() : (ped + 0);
+    } catch (_) {
+        return false;
+    }
+
+    let isDamaged = false;
+    try {
+        if (playerChar.hasBeenDamagedByChar(ped) || (activePed && Char.DoesExist(activePed) && activePed.hasBeenDamagedByChar(ped))) {
+            isDamaged = true;
+        }
+    } catch (_) {}
+
+    if (!isDamaged) return false;
+
+    // أول مرة يتم فيها رصد الضرر من هذا المعتدي
+    if (!damageLedger[handle]) {
+        damageLedger[handle] = now;
+        return true;
+    }
+
+    // فحص ما إذا كان هناك ضرر جديد تعرض له اللاعب أو المرافق لتجديد النافذة
+    try {
+        let curCjHp = playerChar.getHealth();
+        let curPedHp = (activePed && Char.DoesExist(activePed)) ? activePed.getHealth() : 100;
+        if (curCjHp < lastKnownCjHealth || curPedHp < lastKnownActivePedHealth) {
+            damageLedger[handle] = now;
+        }
+    } catch (_) {}
+
+    // صلاحية نافذة الرد التكتيكي خلال 10 ثوانٍ فقط من آخر ضرر فعلي
+    return (now - damageLedger[handle] < DAMAGE_MEMORY_MS);
+}
+
 // دالة الكشف المتقدم عن التهديدات المحيطة باللاعب أو المرافق
 function findNearbyThreat(playerChar, activePed, maxRadius) {
     if (!playerChar || !Char.DoesExist(playerChar)) return null;
+    let now = Date.now();
+
+    // تنظيف مؤقت الهدف الميت الأخير بعد انقضاء 5 ثوانٍ
+    if (lastKilledThreat && now - lastKilledTime > 5000) {
+        lastKilledThreat = null;
+    }
+
+    // تنظيف دوري للذاكرة المؤقتة للأضرار
+    if (Math.random() < 0.05) {
+        for (let k in damageLedger) {
+            if (now - damageLedger[k] > 30000) {
+                delete damageLedger[k];
+            }
+        }
+    }
+
     let pPos = playerChar.getCoordinates();
     let player = new Player(0);
     let wanted = 0;
@@ -275,18 +335,19 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
                 isDead = true;
             }
 
-            if (!isDead && hp > 0 && ped !== playerChar && ped !== activePed) {
+            // التأكد من أن الشخص حي وصحته > 5 وأنه ليس اللاعب ولا المرافق ولا الهدف الميت مسبقاً
+            if (!isDead && hp > 5 && ped !== playerChar && ped !== activePed && ped !== lastKilledThreat) {
+                let pedPos = ped.getCoordinates();
+                let d = Math.hypot(pPos.x - pedPos.x, pPos.y - pedPos.y, pPos.z - pedPos.z);
                 let isEnemy = false;
 
-                // 1. هل الشخص ألحق ضرراً باللاعب أو المرافق؟
-                try {
-                    if (playerChar.hasBeenDamagedByChar(ped) || activePed.hasBeenDamagedByChar(ped)) {
-                        isEnemy = true;
-                    }
-                } catch (_) {}
+                // 1. هل الشخص ألحق ضرراً حديثاً باللاعب أو المرافق خلال نافذة 10 ثوانٍ؟
+                if (isRecentAttacker(ped, now, playerChar, activePed)) {
+                    isEnemy = true;
+                }
 
-                // 2. هل الشخص يطلق النار وقريب من اللاعب؟
-                if (!isEnemy) {
+                // 2. هل الشخص يطلق النار وقريب من اللاعب (مسافة خطيرة <= 30 متراً)؟
+                if (!isEnemy && d <= 30.0) {
                     try {
                         if (ped.isShooting()) {
                             isEnemy = true;
@@ -294,40 +355,42 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
                     } catch (_) {}
                 }
 
-                // 3. إذا كان اللاعب مطلوباً للشرطة (Wanted Level > 0)، رجال الشرطة أعداء تلقائياً
-                if (!isEnemy && wanted > 0) {
+                // 3. الشرطة: لا نشتبك تلقائياً إلا إذا كان المطلوب 2 نجوم فأكثر أو كان المرافق قتالياً
+                if (!isEnemy && wanted >= 2) {
                     try {
                         let pType = ped.getPedType();
                         if (pType === 6) { // 6 = COP
-                            isEnemy = true;
-                        }
-                    } catch (_) {}
-                }
-
-                // 4. فحص عصابات بالاس وفاغوس المعادية لشخصية القاتل/المجرم
-                if (!isEnemy && currentNpcPersona === "hitman") {
-                    try {
-                        let m = ped.getModel();
-                        if (RIVAL_GANGS.indexOf(m) !== -1) {
-                            let pedPos = ped.getCoordinates();
-                            let d = Math.hypot(pPos.x - pedPos.x, pPos.y - pedPos.y, pPos.z - pedPos.z);
-                            if (d <= 35.0) {
+                            if (currentNpcPersona === "hitman" || currentNpcPersona === "heavy" || wanted >= 2) {
                                 isEnemy = true;
                             }
                         }
                     } catch (_) {}
                 }
 
-                if (isEnemy) {
-                    let pedPos = ped.getCoordinates();
-                    let d = Math.hypot(pPos.x - pedPos.x, pPos.y - pedPos.y, pPos.z - pedPos.z);
-                    if (d < bestDist) {
-                        bestDist = d;
-                        foundThreat = ped;
-                    }
+                // 4. فحص عصابات بالاس وفاغوس المعادية لشخصية القاتل/المجرم
+                if (!isEnemy && (currentNpcPersona === "hitman" || currentNpcPersona === "heavy")) {
+                    try {
+                        let m = ped.getModel();
+                        if (RIVAL_GANGS.indexOf(m) !== -1 && d <= 35.0) {
+                            isEnemy = true;
+                        }
+                    } catch (_) {}
+                }
+
+                if (isEnemy && d < bestDist) {
+                    bestDist = d;
+                    foundThreat = ped;
                 }
             }
             ped = World.GetRandomCharInSphereNoSaveRecursive(pPos.x, pPos.y, pPos.z, maxRadius, true, 1);
+        }
+    } catch (_) {}
+
+    // تحديث سجل صحة اللاعب والمرافق لضمان دقة نافذة الردع
+    try {
+        lastKnownCjHealth = playerChar.getHealth();
+        if (activePed && Char.DoesExist(activePed)) {
+            lastKnownActivePedHealth = activePed.getHealth();
         }
     } catch (_) {}
 
@@ -369,8 +432,6 @@ function playNpcAnimation(ped, animName, ifpName, loop, durationMs) {
 
 try {
     IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
-    IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
-    IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
 } catch (_) {}
 
 while (true) {
@@ -1204,8 +1265,6 @@ while (true) {
             currentNpcPersona = "companion";
             activeMode = "companion";
             try {
-                IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
-                IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
                 IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
             } catch (_) {}
         } else {
@@ -1336,10 +1395,12 @@ while (true) {
                         }
 
                         if (threatDead) {
+                            lastKilledThreat = currentThreatChar;
+                            lastKilledTime = now;
                             currentThreatChar = null;
                             try {
+                                activePed.clearTasksImmediately();
                                 if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
-                                    activePed.clearTasksImmediately();
                                     let grp = player.getGroup();
                                     grp.setLeader(playerChar);
                                     grp.setDefaultTaskAllocator(0);
@@ -1475,10 +1536,12 @@ while (true) {
                     } else {
                         // زوال الخطر: تنظيف فوري لمهام إطلاق النار وإعادة التبعية لـ CJ
                         if (currentThreatChar !== null) {
+                            lastKilledThreat = currentThreatChar;
+                            lastKilledTime = now;
                             currentThreatChar = null;
                             try {
+                                activePed.clearTasksImmediately();
                                 if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
-                                    activePed.clearTasksImmediately();
                                     let grp = player.getGroup();
                                     grp.setLeader(playerChar);
                                     grp.setDefaultTaskAllocator(0);
@@ -1517,7 +1580,7 @@ while (true) {
     }
 
     // فحص ضغط المفتاح H (كود 72) - يتم تجاهله تماماً أثناء فتح شريط كتابة الأوامر
-    if (!isTypingMode && Pad.IsKeyPressed(72)) {
+    if (!isTypingMode && isKeyJustPressedCustom(72)) {
         if (now - lastPress > 800) { // منع التكرار السريع
             lastPress = now;
 
@@ -1533,8 +1596,7 @@ while (true) {
                         currentNpcPersona = "companion";
                         activeMode = "companion";
                         try {
-                            IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
-                            IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
+                            IniFile.WriteInt(1, INI_FILE, "GAME", "npc_active");
                         } catch (_) {}
                         
                         // 1. تنظيف أي مهمة سابقة للشخصية فوراً
@@ -1632,8 +1694,6 @@ while (true) {
                     currentNpcPersona = "companion";
                     activeMode = "companion";
                     try {
-                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
-                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
                         IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
                     } catch (_) {}
                 } catch (e) {
@@ -1649,8 +1709,6 @@ while (true) {
                     currentNpcPersona = "companion";
                     activeMode = "companion";
                     try {
-                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_persona");
-                        IniFile.WriteString("companion", INI_FILE, "GAME", "active_mode");
                         IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
                     } catch (_) {}
                 }

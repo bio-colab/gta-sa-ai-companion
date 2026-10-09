@@ -185,8 +185,8 @@ class MemoryDB:
                     return {"persona": row["persona"] or "", "persona_custom": row["persona_custom"] or ""}
                 return {"persona": "", "persona_custom": ""}
 
-    def record_memory(self, character_name: str, event_type: str, description: str, zone: str, emotional_impact: float = 0.0):
-        """تسجيل ذكرى أو موقف مشترك بين CJ والـ NPC مع أثره العاطفي"""
+    def record_memory(self, character_name: str, event_type: str, description: str, zone: str, emotional_impact: float = 0.0, model_id: Optional[int] = None):
+        """تسجيل ذكرى أو موقف مشترك بين CJ والـ NPC مع أثره العاطفي وربطه بالـ model_id"""
         now = datetime.now().isoformat()
         with self.lock:
             with self._get_connection() as conn:
@@ -196,28 +196,44 @@ class MemoryDB:
                 VALUES (?, ?, ?, ?, ?, ?)
                 """, (character_name, event_type, description, zone, now, emotional_impact))
 
-                # تحديث مقياس الثقة (Trust Score) تدريجياً وبشكل ملموس بناءً على الأثر العاطفي
+                # تحديث مقياس الثقة (Trust Score) تدريجياً وبشكل ملموس بناءً على model_id لمنع تصادم الأسماء
                 if emotional_impact != 0.0:
+                    if model_id is not None:
+                        cursor.execute("""
+                        UPDATE characters
+                        SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
+                        WHERE model_id = ?
+                        """, (emotional_impact, model_id))
+                    else:
+                        cursor.execute("""
+                        UPDATE characters
+                        SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
+                        WHERE name = ?
+                        """, (emotional_impact, character_name))
+
+                conn.commit()
+
+    def update_trust(self, model_id_or_name: Any, delta: float) -> float:
+        """تعديل مقياس الثقة مباشرة (زيادة أو نقصان) وربطه برقم الموديل لمنع تلوث الشخصيات"""
+        with self.lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                if isinstance(model_id_or_name, int):
+                    cursor.execute("""
+                    UPDATE characters
+                    SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
+                    WHERE model_id = ?
+                    """, (delta, model_id_or_name))
+                    conn.commit()
+                    cursor.execute("SELECT trust_score FROM characters WHERE model_id = ?", (model_id_or_name,))
+                else:
                     cursor.execute("""
                     UPDATE characters
                     SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
                     WHERE name = ?
-                    """, (emotional_impact, character_name))
-
-                conn.commit()
-
-    def update_trust(self, character_name: str, delta: float) -> float:
-        """تعديل مقياس الثقة مباشرة (زيادة أو نقصان) وإرجاع القيمة المحدثة"""
-        with self.lock:
-            with self._get_connection() as conn:
-                cursor = conn.cursor()
-                cursor.execute("""
-                UPDATE characters
-                SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
-                WHERE name = ?
-                """, (delta, character_name))
-                conn.commit()
-                cursor.execute("SELECT trust_score FROM characters WHERE name = ?", (character_name,))
+                    """, (delta, str(model_id_or_name)))
+                    conn.commit()
+                    cursor.execute("SELECT trust_score FROM characters WHERE name = ?", (str(model_id_or_name),))
                 row = cursor.fetchone()
                 return float(row["trust_score"]) if row and row["trust_score"] is not None else 0.5
 
@@ -276,16 +292,32 @@ class MemoryDB:
 
                 return filtered
 
-    def get_character_status(self, character_name: str) -> Dict[str, Any]:
-        """الحصول على ملخص العلاقة الحالية والثقة"""
+    def get_zone_memories(self, character_name: str, zone: str, limit: int = 2) -> List[str]:
+        """استرجاع ذكريات مرتبطة بموقع مكاني محدد (Spatial Anchoring)"""
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT trust_score, times_recruited FROM characters WHERE name = ?", (character_name,))
+                cursor.execute("""
+                SELECT description FROM memories 
+                WHERE character_name = ? AND zone = ? 
+                ORDER BY id DESC LIMIT ?
+                """, (character_name, zone, limit))
+                rows = cursor.fetchall()
+                return [r["description"] for r in rows]
+
+    def get_character_status(self, model_id_or_name: Any) -> Dict[str, Any]:
+        """الحصول على ملخص العلاقة الحالية والثقة والشجاعة بدقة model_id"""
+        with self.lock:
+            with self._get_connection() as conn:
+                cursor = conn.cursor()
+                if isinstance(model_id_or_name, int):
+                    cursor.execute("SELECT trust_score, times_recruited, bravery FROM characters WHERE model_id = ?", (model_id_or_name,))
+                else:
+                    cursor.execute("SELECT trust_score, times_recruited, bravery FROM characters WHERE name = ?", (str(model_id_or_name),))
                 row = cursor.fetchone()
                 if row:
                     return dict(row)
-                return {"trust_score": 0.5, "times_recruited": 1}
+                return {"trust_score": 0.5, "times_recruited": 1, "bravery": 0.5}
 
 if __name__ == "__main__":
     db = MemoryDB()

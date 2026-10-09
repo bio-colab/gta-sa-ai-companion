@@ -56,6 +56,12 @@ class PedDemographicsEngine:
     def _load_peds_ide(self):
         """قراءة وتحليل ملف peds.ide الأصلي للعبة"""
         if not os.path.exists(PEDS_IDE_PATH):
+            print("=" * 65)
+            print(f"[WARN] data/peds.ide not found at: {PEDS_IDE_PATH}")
+            print("[INFO] Loading built-in demographic fallbacks for common SA peds.")
+            print("[FIX ] For 100% full archetype coverage, run inside GTA SA root folder.")
+            print("=" * 65)
+            self._load_fallback_demographics()
             return
 
         try:
@@ -119,6 +125,22 @@ class PedDemographicsEngine:
                         }
         except Exception:
             pass
+
+    def _load_fallback_demographics(self):
+        """قاعدة بيانات مدمجة لأشهر شخصيات سان أندرياس عند التشغيل في بيئة تطويرية بدون ملف اللعبة"""
+        female_models = {9, 10, 11, 12, 13, 31, 38, 40, 41, 55, 56, 63, 64, 69, 75, 76, 77, 85, 87, 88, 89, 90, 91, 92, 93, 138, 139, 140, 141, 145, 148, 150, 151, 152, 157, 169, 178, 190, 191, 192, 193, 194, 195, 207, 211, 214, 215, 216, 219, 224, 225, 226, 231, 232, 233, 237, 238, 243, 244, 245, 246, 251, 256, 257, 263}
+        cops = {280, 281, 282, 283, 284, 285, 286, 287, 288}
+        for mid in range(300):
+            if mid in female_models:
+                self.peds_data[mid] = {"model_id": mid, "model_name": f"PED_{mid}", "gender": "female", "age": "young" if mid % 2 == 0 else "adult", "archetype": "Los Santos Citizen Woman", "anim_group": "woman"}
+            elif mid in cops:
+                self.peds_data[mid] = {"model_id": mid, "model_name": f"COP_{mid}", "gender": "male", "age": "adult", "archetype": "Police Officer", "anim_group": "man"}
+            elif mid in GROVE_HOMIES:
+                self.peds_data[mid] = {"model_id": mid, "model_name": f"GROVE_{mid}", "gender": "male", "age": "young", "archetype": "Grove Street Families Gangster", "anim_group": "man"}
+            elif mid in BALLAS_GANG:
+                self.peds_data[mid] = {"model_id": mid, "model_name": f"BALLAS_{mid}", "gender": "male", "age": "young", "archetype": "Ballas Street Gangster", "anim_group": "man"}
+            elif mid in VAGOS_GANG:
+                self.peds_data[mid] = {"model_id": mid, "model_name": f"VAGOS_{mid}", "gender": "male", "age": "young", "archetype": "Los Santos Vagos Gangster", "anim_group": "man"}
 
     def get_demographics(self, model_id: int) -> Dict[str, Any]:
         """استخراج الملف التعريفي الديمغرافي الكامل لشخصية الـ NPC"""
@@ -305,32 +327,33 @@ def resolve_persona_input(text: str) -> Optional[Dict[str, Any]]:
     if not is_persona_cmd:
         return None
 
-    instr_lower = raw_instruction.lower()
+    import re
 
-    # مطابقة التصنيف مع الأنماط الأساسية أو إعادة الضبط
-    if any(k in instr_lower for k in ["reset", "normal", "companion", "default", "none", "عادي", "افتراضي", "إلغاء", "تصفير"]):
-        res = dict(CORE_PERSONAS["companion"])
-        res["custom_text"] = ""
-        return res
-    elif any(k in instr_lower for k in ["hitman", "مجرم", "قاتل", "رامي", "سفاح", "killer", "assassin", "shooter", "marksman", "sniper"]):
+    # 1. فحص الأدوار التخصصية أولاً بحدود الكلمات الصارمة لمنع اختطاف كلمة normal
+    if re.search(r'\b(hitman|killer|assassin|shooter|marksman|sniper)\b', instr_lower) or any(k in instr_lower for k in ["مجرم", "قاتل", "رامي", "سفاح"]):
         res = dict(CORE_PERSONAS["hitman"])
         res["custom_text"] = raw_instruction
         return res
-    elif any(k in instr_lower for k in ["medic", "معالج", "طبيب", "دكتور", "مسعف", "healer", "doctor", "health", "علاج"]):
+    elif re.search(r'\b(medic|healer|doctor)\b', instr_lower) or any(k in instr_lower for k in ["معالج", "طبيب", "دكتور", "مسعف"]):
         res = dict(CORE_PERSONAS["medic"])
         res["custom_text"] = raw_instruction
         return res
-    elif any(k in instr_lower for k in ["heavy", "متفجرات", "دمار", "فوضى", "صواريخ", "rpg", "demolitions", "explosive", "chaos", "قنابل"]):
+    elif re.search(r'\b(heavy|demolitions|explosive|chaos|rpg)\b', instr_lower) or any(k in instr_lower for k in ["متفجرات", "دمار", "فوضى", "صواريخ", "قنابل"]):
         res = dict(CORE_PERSONAS["heavy"])
         res["custom_text"] = raw_instruction
         return res
-    elif any(k in instr_lower for k in ["driver", "سائق", "نقل", "توصيل", "transporter", "wheelman", "pilot", "getaway", "قيادة"]):
+    elif re.search(r'\b(driver|transporter|wheelman|pilot|getaway)\b', instr_lower) or any(k in instr_lower for k in ["سائق", "نقل", "توصيل", "سواقة"]):
         res = dict(CORE_PERSONAS["driver"])
         res["custom_text"] = raw_instruction
         return res
-    elif any(k in instr_lower for k in ["girlfriend", "حبيبة", "عشيقة", "رومانسية", "lover", "romantic", "bae", "wife", "زوجة", "بنات"]):
+    elif re.search(r'\b(girlfriend|lover|romantic|bae|wife)\b', instr_lower) or any(k in instr_lower for k in ["حبيبة", "عشيقة", "رومانسية", "زوجة"]):
         res = dict(CORE_PERSONAS["girlfriend"])
         res["custom_text"] = raw_instruction
+        return res
+    # 2. فحص إعادة الضبط أو الوضع العادي أخيراً وبشروط صارمة فقط
+    elif re.search(r'\b(reset|default)\b|^\s*(normal|companion|none|عادي|افتراضي|تصفير|إلغاء)\s*$', instr_lower):
+        res = dict(CORE_PERSONAS["companion"])
+        res["custom_text"] = ""
         return res
     else:
         return {

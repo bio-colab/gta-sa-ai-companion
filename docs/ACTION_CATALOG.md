@@ -80,7 +80,7 @@ Specialized operational roles with dynamic in-game stat overrides:
 | **Hitman** | 100% Accuracy, 100 Shoot Rate, M4 & Deagle | Autonomous lethal engagement against threats, Ballas, Vagos, and police up to 65m. | `/persona hitman`, `/hitman` |
 | **Field Medic** | 65% Accuracy, Deagle sidearm, Defensive | Autonomous Field Triage: heals CJ to 100 HP + 50 armor whenever CJ drops below 70 HP (18s cooldown). | `/persona medic`, `/medic` |
 | **Demolitions** | Heavy RPG (ID 35), SPAS-12, 100 Armor | Anti-Air & Anti-Vehicle: Locks onto and destroys police cruisers, SWAT vans, and police helicopters with rockets (Wanted $\ge 2$). | `/persona heavy`, `/heavy` |
-| **Transporter** | Evasion Speed: 44.0, Auto-repair | Autonomous Getaway: hops in as driver if CJ enters passenger seat; auto-repairs engine health if damaged. | `/persona driver`, `/driver` |
+| **Transporter** | Evasion Speed: 35.0 - 50.0 (scales with trust), Auto-repair | Autonomous Getaway: hops in as driver if CJ enters passenger seat; auto-repairs engine health if damaged. | `/persona driver`, `/driver` |
 | **Girlfriend** | Romance / Club emotes unlocked | Affectionate greetings and idle waves; cowers and screams protective warnings during shootouts. | `/persona girlfriend`, `/girlfriend` |
 | **Custom** | Player-defined System Instruction | Roleplays strictly according to custom player instructions stored in SQLite. | `/persona <custom>` |
 
@@ -91,7 +91,7 @@ Specialized operational roles with dynamic in-game stat overrides:
 The companion doesn't just wait for orders; they automatically react to the living environment of San Andreas:
 
 1. **Severe Vehicle Collisions**:
-   - If CJ crashes the car with impact damage $> 150$, companion screams, complains about CJ's driving, or warns him to slow down.
+   - If CJ crashes the car with impact damage $\ge 50$ HP, companion screams, complains about CJ's driving, or warns him to slow down.
 2. **Car Radio Station Commentary**:
    - The companion recognizes the current playing station (e.g. *Radio Los Santos*, *K-DST*, *Bounce FM*, *WCTR*) and shares trivia or opinions about the music genre.
 3. **Time of Day & Sunrise/Sunset**:

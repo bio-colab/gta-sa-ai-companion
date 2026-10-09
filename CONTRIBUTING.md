@@ -48,7 +48,7 @@ You don't need to know everything about GTA modding to contribute. Here are area
 4. **Verify JavaScript Syntax**:
    Ensure you have [Node.js](https://nodejs.org/) installed to validate CLEO Redux scripts:
    ```bash
-   node -c cleo/stage1_test[fs].js
+   node --check "cleo/stage1_test[fs].js"
    ```
 
 ---
@@ -88,7 +88,7 @@ MODE_ACTIONS = {
    git checkout -b feature/my-cool-action
    ```
 2. **Verify Stability Before Committing**:
-   - Ensure `node -c cleo/stage1_test[fs].js` reports **zero syntax errors**.
+   - Ensure `node --check "cleo/stage1_test[fs].js"` reports **zero syntax errors**.
    - Ensure all Python files compile cleanly with `python -m py_compile AINPC/*.py`.
    - Never commit sensitive files (`.env`, `memory.db`, or any game binaries).
 3. **Commit Messages**:

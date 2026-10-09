@@ -6,8 +6,8 @@
 import os
 import re
 import json
+import sys
 import time
-import random
 import urllib.request
 import urllib.error
 from typing import Dict, Any, Optional, Tuple, List
@@ -21,6 +21,15 @@ except ImportError:
     from ped_demographics import PedDemographicsEngine, CORE_PERSONAS, resolve_persona_input
 
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+
+NEGATION_WORDS = ["don't", "dont", "never", "stop", "quit", "cancel", "لا", "ما ت", "بدون", "توقف", "انتبه", "كفى"]
+
+def is_negated(text: str) -> bool:
+    """كاشف النفي لمنع تفعيل الأوضاع عند طلب التوقف أو النهي مثل don't shoot أو لا تطلق"""
+    if not text:
+        return False
+    t = text.lower()
+    return any(n in t for n in NEGATION_WORDS)
 
 def has_intent_word(text: str, keywords: list) -> bool:
     """فحص نية اللاعب بدقة حدود الكلمات (Regex Word Boundaries) لمنع المطابقة الجزئية الخاطئة مثل car في care"""
@@ -62,7 +71,7 @@ MODE_ACTIONS = {
         "follow_player", "look_at_player", "face_player", "heal", "attack_threat", "none"
     ],
     "combat": [
-        "arm_rifle", "arm_pistol", "arm_smg", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
+        "arm_rifle", "arm_pistol", "arm_smg", "arm_uzi", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
     ],
     "vehicle": [
         "fetch_car", "drive_wander", "drive_to_target", "driveby", "exit_car", "follow_player", "none"
@@ -76,7 +85,7 @@ class LLMBrain:
     def __init__(self):
         env = load_env()
         self.api_key = env.get("GROQ_API_KEY", "")
-        self.model = env.get("GROQ_MODEL", "qwen/qwen3.8-27b")
+        self.model = env.get("GROQ_MODEL", "llama-3.3-70b-versatile")
         self.endpoint = "https://api.groq.com/openai/v1/chat/completions"
         self.last_response_time = 0.0
         self.current_identity = None
@@ -85,9 +94,19 @@ class LLMBrain:
         self.current_mode = "companion"
         self.current_persona = None
         self.session_memories: List[str] = []
+        self._call_timestamps: List[float] = []
 
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_key.startswith("gsk_"))
+
+    def check_rate_limit(self) -> bool:
+        """حاكم ميزانية الـ API (Token/Request Budget Regulator) - حد أقصى 25 استدعاء في الدقيقة"""
+        now = time.time()
+        self._call_timestamps = [t for t in self._call_timestamps if now - t < 60.0]
+        if len(self._call_timestamps) >= 25:
+            return False
+        self._call_timestamps.append(now)
+        return True
 
     def reset_session(self):
         """إعادة ضبط الجلسة بالكامل عند تحرير الـ NPC أو موته لضمان عزل تام للشخصيات والذكريات"""
@@ -189,7 +208,7 @@ class LLMBrain:
 
         # تسجيل الموقف في قاعدة الذكريات
         name = self.current_identity["name"] if self.current_identity else "Companion"
-        self.db.record_memory(name, "persona_change", f"Role assigned: {persona_data['title']}", "San Andreas", emotional_impact=0.15)
+        self.db.record_memory(name, "persona_change", f"Role assigned: {persona_data['title']}", "San Andreas", emotional_impact=0.10, model_id=model_id)
         return persona_data.get("intro_quote", "Ready CJ.")
 
     def generate_response(self, context: Dict[str, Any], trigger_type: str, user_prompt: Optional[str] = None) -> Tuple[str, str, str]:
@@ -197,7 +216,12 @@ class LLMBrain:
         توليد رد ذكي بنظام الطبقات والمودات المتمايزة (Layered Modes Architecture)
         """
         if not self.is_configured():
-            return ("Error: Groq API key not configured.", "none", self.current_mode)
+            print("[LLM WARN] Groq API key is missing or invalid in .env", file=sys.stderr)
+            return (self._get_fallback_speech(), "none", self.current_mode)
+
+        if not self.check_rate_limit():
+            print("[LLM WARN] API rate limit reached (max 25 req/min). Throttling.", file=sys.stderr)
+            return (self._get_fallback_speech(), "none", self.current_mode)
 
         zone = context.get("zone", "San Andreas")
         cj_health = context.get("cj_health", 100)
@@ -208,31 +232,31 @@ class LLMBrain:
         npc_dist = context.get("npc_dist", 2.0)
         npc_model = context.get("npc_model", 107)
 
-        # فحص إشارات تبديل المود التلقائية من كلام اللاعب بمطابقة دقيقة للكلمات (Regex Word Boundaries)
+        # فحص إشارات تبديل المود التلقائية مع حارس النفي ومنع الكلمات الفضفاضة
         prompt_lower = (user_prompt or "").lower()
-        if has_intent_word(prompt_lower, [
-            "ارقص", "رقص", "دانس", "dance", "دخن", "تدخين", "smoke", "سكر", "سكران", "drunk", "تغزل", "flirt", "صفق", "تصفيق", "cheer",
-            "مود المشاعر", "وضع المشاعر", "مود الرقص", "وضع الرقص", "مود السكر", "فعّل المشاعر",
-            "emote mode", "social mode", "chill mode", "dance mode", "party mode", "activate emote", "switch to emote"
-        ]):
-            self.current_mode = "emote"
-        elif has_intent_word(prompt_lower, [
-            "سلاح", "اسلحة", "مسدس", "رشاش", "بندقية", "شوتجن", "قاتل", "احميني", "احمي", "اطلق", "حرب", "درايف باي", "دافع",
-            "مود القتال", "وضع القتال", "استعد للحرب", "جهّز السلاح", "اطلق النار", "اطلق من النافذة",
-            "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "shoot out", "open fire", "gun", "weapon", "shoot", "fight", "protect", "kill"
-        ]):
-            self.current_mode = "combat"
-        elif has_intent_word(prompt_lower, [
-            "سيارة", "السيارة", "جيب سيارة", "احضر سيارة", "سرق سيارة", "سوق", "قد السيارة", "اركب السيارة", "اركبي", "انزل من السيارة",
-            "مود القيادة", "وضع القيادة", "جلب السيارة",
-            "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive me", "car", "drive", "exit car"
-        ]):
-            self.current_mode = "vehicle"
-        elif has_intent_word(prompt_lower, [
-            "الوضع العادي", "مود المرافقة", "اتبعني", "الحقني", "تعال", "ارجع", "قف", "توقف", "اثبت", "إلغاء",
-            "normal mode", "companion mode", "follow me", "follow", "stop", "cancel", "regroup", "come back", "wait", "stay"
-        ]):
-            self.current_mode = "companion"
+        if not is_negated(prompt_lower):
+            if has_intent_word(prompt_lower, [
+                "ارقص", "دانس", "دخن", "تدخين", "تغزل", "صفق", "تصفيق",
+                "مود المشاعر", "وضع المشاعر", "مود الرقص", "وضع الرقص", "مود السكر", "فعّل المشاعر",
+                "emote mode", "social mode", "chill mode", "dance mode", "party mode", "activate emote", "switch to emote"
+            ]):
+                self.current_mode = "emote"
+            elif has_intent_word(prompt_lower, [
+                "مود القتال", "وضع القتال", "استعد للحرب", "جهّز السلاح", "اطلق النار", "اطلق من النافذة", "درايف باي",
+                "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "open fire"
+            ]):
+                self.current_mode = "combat"
+            elif has_intent_word(prompt_lower, [
+                "جيب سيارة", "احضر سيارة", "سرق سيارة", "قد السيارة", "اركب السيارة", "اركبي", "انزل من السيارة",
+                "مود القيادة", "وضع القيادة", "جلب السيارة",
+                "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive to target", "drive to marker"
+            ]):
+                self.current_mode = "vehicle"
+            elif has_intent_word(prompt_lower, [
+                "الوضع العادي", "مود المرافقة", "اتبعني", "الحقني", "تعال", "ارجع", "قف", "توقف", "اثبت", "إلغاء",
+                "normal mode", "companion mode", "follow me", "regroup", "come back", "stay here", "hold position"
+            ]):
+                self.current_mode = "companion"
 
         allowed_actions = MODE_ACTIONS.get(self.current_mode, MODE_ACTIONS["companion"])
         allowed_actions_str = ", ".join([f'"{a}"' for a in allowed_actions])
@@ -244,7 +268,6 @@ class LLMBrain:
         npc_gender = identity.get("gender", "male")
         npc_age = identity.get("age", "adult")
         npc_guidelines = identity.get("guidelines", "")
-        npc_flirty = identity.get("flirty", False)
 
         npc_weapon_name = context.get("npc_weapon_name", "Unarmed")
         nearest_food = context.get("nearest_food", "Cluckin' Bell / Well Stacked Pizza nearby")
@@ -253,17 +276,22 @@ class LLMBrain:
         target_blip = context.get("target_blip", "None")
 
         time_str = context.get("time_str", "12:00 (Day)")
-        weather_str = context.get("weather_str", "Sunny (Clear)")
+        weather_str = context.get("weather_str", "Clear")
         radio_str = context.get("radio_station", "Radio Off")
         threat_str = context.get("threat_state", "Clear (No Threats)")
 
-        # استرجاع الذكريات الحديثة ومستوى الثقة من SQLite مع فلترة الدور النشط لعزل تام
+        # استرجاع الذكريات الحديثة ومستوى الثقة بدقة model_id والارتساء المكاني
         active_p_type = self.current_persona.get("type") if self.current_persona else None
         recent_mems = self.db.get_recent_memories(npc_name, limit=3, persona_filter=active_p_type)
-        char_status = self.db.get_character_status(npc_name)
-        trust_pct = int(char_status.get("trust_score", 0.5) * 100)
+        zone_mems = self.db.get_zone_memories(npc_name, zone, limit=1)
+        char_status = self.db.get_character_status(npc_model)
+        trust_val = float(char_status.get("trust_score", 0.5))
+        trust_pct = int(trust_val * 100)
 
         all_mems = list(recent_mems)
+        for zm in zone_mems:
+            if zm not in all_mems:
+                all_mems.append(f"Memory here in {zone}: {zm}")
         if self.session_memories:
             all_mems.extend(self.session_memories[-2:])
 
@@ -308,7 +336,7 @@ class LLMBrain:
             f"- CURRENT ACTIVE MODE: [{self.current_mode.upper()}].\n"
             f"- Allowed actions per mode:\n"
             f"  * COMPANION: follow_player, look_at_player, face_player, heal, attack_threat, none\n"
-            f"  * COMBAT: arm_rifle, arm_pistol, arm_smg, arm_shotgun, arm_rpg, arm_combat_shotgun, disarm, driveby, attack_threat, heal, hands_up, follow_player, none\n"
+            f"  * COMBAT: arm_rifle, arm_pistol, arm_smg, arm_uzi, arm_shotgun, arm_rpg, arm_combat_shotgun, disarm, driveby, attack_threat, heal, hands_up, follow_player, none\n"
             f"  * VEHICLE: fetch_car, drive_wander, drive_to_target, driveby, exit_car, follow_player, none\n"
             f"  * EMOTE: dance, flirt, kiss, strip, lapdance, cuddle, act_drunk, sober_up, gang_sign, smoke, cheer, cower, follow_player, none\n"
             f"- SEAMLESS INTENT TRANSITIONS:\n"
@@ -321,7 +349,7 @@ class LLMBrain:
             f"- Car Crashes: If CJ crashes violently, react in panic, scream, or complain angrily about his crazy driving!\n"
             f"- Car Radio: When riding in a car, comment on the music station playing or the vibe!\n"
             f"- Drive-By / Street Shootouts: Shout street battle cries, swear at enemies/cops, and shoot back!\n"
-            f"- Weather & Time: You are aware of day/night, rain, fog, and sunset. Reference them if relevant!\n"
+            f"- Time & Environment: You know the in-game clock hour and time period ({time_str}). Reference morning, daylight, dusk, night, or late midnight street atmosphere naturally! (Do not claim rain or fog unless CJ explicitly mentions it).\n"
             f"RELATIONSHIP & MEMORIES WITH CJ:\n"
             f"- Current Trust in CJ: {trust_pct}%.\n"
             f"- Your shared past memories with CJ:\n{memories_text}\n"
@@ -339,13 +367,15 @@ class LLMBrain:
 
         if user_prompt:
             user_content = f"Current Game State: [{world_state}]\nCJ says to you: \"{user_prompt}\"\nRespond now as JSON:"
-            # تسجيل المحادثة في الذاكرة بأثر متوازن
-            self.db.record_memory(npc_name, "dialogue", f"CJ spoke with me: \"{user_prompt[:40]}\"", zone, emotional_impact=0.01)
+            # تسجيل المحادثة في الذاكرة دون تضخيم الثقة (عائد متناقص شبه معدوم للحوار العادي)
+            chat_trust_bonus = max(0.0, round(0.003 * (1.0 - trust_val), 4))
+            self.db.record_memory(npc_name, "dialogue", f"CJ spoke with me: \"{user_prompt[:40]}\"", zone, emotional_impact=chat_trust_bonus, model_id=npc_model)
         else:
             event_desc = context.get("event_desc", "Observing the situation")
             user_content = f"Current Game State: [{world_state}]\nEvent Occurred: {event_desc}\nReact briefly as JSON:"
-            # تسجيل الحدث البارز في الذاكرة بأثر متوازن
-            self.db.record_memory(npc_name, "event", event_desc, zone, emotional_impact=0.03 if "joined" in event_desc else 0.0)
+            # تسجيل الحدث البارز فقط
+            join_bonus = 0.02 if "joined" in event_desc else 0.0
+            self.db.record_memory(npc_name, "event", event_desc, zone, emotional_impact=join_bonus, model_id=npc_model)
 
         payload = {
             "model": self.model,
@@ -399,29 +429,31 @@ class LLMBrain:
                     # تسجيل ذكريات الأكشن بأثر عاطفي متوازن ومنطقي
                     if action.startswith("arm_"):
                         gun_name = action.replace("arm_", "").upper()
-                        self.db.record_memory(npc_name, "combat", f"Equipped {gun_name} to fight alongside CJ", zone, emotional_impact=0.02)
+                        self.db.record_memory(npc_name, "combat", f"Equipped {gun_name} to fight alongside CJ", zone, emotional_impact=0.02, model_id=npc_model)
                     elif action == "fetch_car":
-                        self.db.record_memory(npc_name, "vehicle", "Stealing and fetching a car for CJ", zone, emotional_impact=0.03)
+                        self.db.record_memory(npc_name, "vehicle", "Stealing and fetching a car for CJ", zone, emotional_impact=0.03, model_id=npc_model)
                     elif action in ["drive_wander", "drive_to_target"]:
-                        self.db.record_memory(npc_name, "vehicle", "Chauffeuring CJ across San Andreas", zone, emotional_impact=0.02)
+                        self.db.record_memory(npc_name, "vehicle", "Chauffeuring CJ across San Andreas", zone, emotional_impact=0.02, model_id=npc_model)
                     elif action == "follow_player":
-                        self.db.record_memory(npc_name, "companion", "Regrouped and followed CJ", zone, emotional_impact=0.01)
+                        self.db.record_memory(npc_name, "companion", "Regrouped and followed CJ", zone, emotional_impact=0.01, model_id=npc_model)
                     elif action == "dance":
-                        self.db.record_memory(npc_name, "social", "Danced with CJ", zone, emotional_impact=0.02)
+                        self.db.record_memory(npc_name, "social", "Danced with CJ", zone, emotional_impact=0.02, model_id=npc_model)
                     elif action in ["strip", "lapdance"]:
-                        self.db.record_memory(npc_name, "romance", "Performed an intimate dance for CJ", zone, emotional_impact=0.03)
+                        self.db.record_memory(npc_name, "romance", "Performed an intimate dance for CJ", zone, emotional_impact=0.03, model_id=npc_model)
                     elif action in ["flirt", "kiss", "cuddle"]:
-                        self.db.record_memory(npc_name, "romance", "Exchanged affection with CJ", zone, emotional_impact=0.03)
+                        self.db.record_memory(npc_name, "romance", "Exchanged affection with CJ", zone, emotional_impact=0.03, model_id=npc_model)
                     elif action == "act_drunk":
-                        self.db.record_memory(npc_name, "social", "Drank and acted tipsy with CJ", zone, emotional_impact=0.01)
+                        self.db.record_memory(npc_name, "social", "Drank and acted tipsy with CJ", zone, emotional_impact=0.01, model_id=npc_model)
                     elif action == "driveby":
-                        self.db.record_memory(npc_name, "combat", "Fired out car window in high-speed drive-by shootout", zone, emotional_impact=0.04)
+                        self.db.record_memory(npc_name, "combat", "Fired out car window in high-speed drive-by shootout", zone, emotional_impact=0.04, model_id=npc_model)
                     elif action == "attack_threat":
-                        self.db.record_memory(npc_name, "combat", "Defended CJ against hostile attacker on foot", zone, emotional_impact=0.04)
+                        self.db.record_memory(npc_name, "combat", "Defended CJ against hostile attacker on foot", zone, emotional_impact=0.04, model_id=npc_model)
 
-                    say_clean = say.encode("ascii", errors="ignore").decode("ascii").strip()
+                    # تعقيم رموز GTA التيلدا الخاصة مع الحفاظ التام على الحروف العربية والنصوص
+                    say_clean = re.sub(r'~(?![rgbynwh]~)', '', say).strip()
+                    say_clean = say_clean.replace('\n', ' ').replace('\r', '')
                     if not say_clean:
-                        say_clean = say[:70]
+                        say_clean = self._get_fallback_speech()
 
                     if user_prompt:
                         self.session_memories.append(f"CJ: \"{user_prompt}\" -> You: \"{say_clean}\"")

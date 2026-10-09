@@ -200,16 +200,25 @@ class SafeIniManager:
             return default
 
     def update_bridge_section(self, bridge_dict: dict) -> bool:
-        """تحديث قسم BRIDGE فقط حصرياً عبر Windows Native API الذرية دون لمس أسطر GAME أو إعادة كتابة الملف"""
+        """تحديث قسم BRIDGE مع ضمان كتابة المعرفات (say_id, action_id) كعلامات التزام ذرية أخيراً"""
+        COMMIT_ORDER = [
+            "status", "ping", "active_mode", "active_persona",
+            "trust_level", "bravery", "say_text", "action_cmd",
+            "say_id", "action_id"
+        ]
+        ordered_keys = [k for k in COMMIT_ORDER if k in bridge_dict]
+        extra_keys = [k for k in bridge_dict if k not in COMMIT_ORDER]
+        write_sequence = [(k, bridge_dict[k]) for k in (extra_keys + ordered_keys)]
+
         if _kernel32 is not None:
             try:
-                for k, v in bridge_dict.items():
+                for k, v in write_sequence:
                     _kernel32.WritePrivateProfileStringW("BRIDGE", str(k), str(v), self.path)
                 return True
             except Exception:
                 pass
 
-        # Fallback لأنظمة غير ويندوز
+        # Fallback لأنظمة غير ويندوز مع الحفاظ على الترتيب الذري
         for _ in range(5):
             try:
                 game_lines = []
@@ -227,7 +236,7 @@ class SafeIniManager:
                             game_lines.append(line)
 
                 bridge_lines = ["[BRIDGE]\n"]
-                for k, v in bridge_dict.items():
+                for k, v in write_sequence:
                     bridge_lines.append(f"{k} = {v}\n")
                 bridge_lines.append("\n")
 
@@ -242,23 +251,23 @@ class SafeIniManager:
         return False
 
     def reset_game_section(self) -> bool:
-        """تصفير قسم GAME بالكامل لمنع قراءة بيانات شبحية قديمة من جلسات سابقة"""
+        """تصفير قسم GAME فقط مع الحفاظ على كل الأقسام الأخرى والتعليقات التوثيقية"""
         for _ in range(5):
             try:
-                bridge_lines = ["[BRIDGE]\n"]
+                out = []
+                skipping_game = False
                 if os.path.exists(self.path):
                     with open(self.path, "r", encoding="utf-8", errors="replace") as f:
                         lines = f.readlines()
-                    in_bridge = False
                     for line in lines:
-                        stripped = line.strip()
-                        if stripped.upper() == "[BRIDGE]":
-                            in_bridge = True
+                        s = line.strip()
+                        if s.upper() == "[GAME]":
+                            skipping_game = True
                             continue
-                        elif stripped.startswith("[") and stripped.endswith("]"):
-                            in_bridge = False
-                        if in_bridge and "=" in stripped:
-                            bridge_lines.append(line)
+                        elif s.startswith("[") and s.endswith("]"):
+                            skipping_game = False
+                        if not skipping_game:
+                            out.append(line)
 
                 default_game_lines = [
                     "\n[GAME]\n",
@@ -270,8 +279,8 @@ class SafeIniManager:
                     "text_cmd_id = 0\n"
                 ]
                 with open(self.path, "w", encoding="utf-8") as f:
-                    f.writelines(bridge_lines + default_game_lines)
-                self.reload()
+                    f.writelines(out + default_game_lines)
+                self.reload(force=True)
                 return True
             except Exception:
                 time.sleep(0.01)
@@ -685,6 +694,7 @@ def main():
     last_radio_comment_time = 0.0
     last_crash_comment_time = 0.0
     last_ambient_comment_time = 0.0
+    last_pain_comment_time = 0.0
     prev_hour_period = None
     prev_weather_id = None
     prev_threat_active = 0
@@ -698,6 +708,9 @@ def main():
             # 1. التحقق من وجود عملية اللعبة الحقيقية لمنع قراءة بيانات قديمة
             gta_alive = is_gta_running()
             if not gta_alive:
+                if prev_ptt_active == 1:
+                    prev_ptt_active = 0
+                    stt.stop_recording_and_transcribe()
                 if handshake_established:
                     handshake_established = False
                     welcome_sent = False
@@ -906,10 +919,10 @@ def main():
                         "npc_weapon_name": npc_weapon_name
                     }
 
-                    # محرك كشف الأحداث الذكي والمحمي من استنزاف الـ API
+                    # محرك كشف الأحداث الذكي والمستقل (Decoupled Autonomous Event Engine)
                     if npc_active == 1:
+                        # 1. حدث تجنيد رفيق جديد
                         if prev_npc_active == 0:
-                            # تجنيد رفيق جديد: استرجاع الشخصية المحفوظة للموديل إن وجدت وإلا رفيق عادي
                             brain.reset_session()
                             identity = brain.get_or_create_identity(npc_model)
                             active_p = brain.current_persona.get("type", "") if brain.current_persona else ""
@@ -927,22 +940,26 @@ def main():
                                 log("  [CLEAN SLATE] Initialized fresh companion session (Default Companion).")
                             log("====================================================================")
                             trigger_llm_event(latest_game_context, f"I just joined CJ as a companion here in {zone_name}!")
-                        elif threat_active == 1 and prev_threat_active == 0:
-                            # تبديل المود إلى القتال محلياً دون استهلاك الـ API
+
+                        # 2. أحداث القتال والتهديد المحلية (بدون API)
+                        if threat_active == 1 and prev_threat_active == 0:
                             if brain.current_mode != "combat":
                                 set_active_mode("combat")
                             log("[LOCAL TACTICS] Hostile threat engaged by squad locally (0 API Calls).")
                         elif threat_active == 0 and prev_threat_active == 1:
                             log("[LOCAL TACTICS] Threat neutralized by squad locally (0 API Calls).")
-                        elif car_crashed == 1 and crash_severity >= 50 and (now - last_crash_comment_time > 8.0):
+
+                        # 3. حدث التصادم المروري العنيف
+                        if car_crashed == 1 and crash_severity >= 50 and (now - last_crash_comment_time > 8.0):
                             last_crash_comment_time = now
-                            # تعديل رصيد الثقة سلباً بسبب تعريض حياة المرافق للخطر
                             brain.record_trust_event(-0.04, f"Violent car crash with CJ ({crash_severity} damage)")
                             bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
                             ini.update_bridge_section(bridge_state)
                             log(f"[LOCAL EVENT] Car collision detected (Damage: {crash_severity} HP). Trust adjusted to {brain.get_current_trust():.2f}.")
                             trigger_llm_event(latest_game_context, f"CJ just crashed the vehicle violently (Severity: {crash_severity} HP damage)! React in shock or anger at his reckless driving!")
-                        elif cj_in_car and car_radio != prev_car_radio and prev_car_radio is not None and (now - last_radio_comment_time > 30.0):
+
+                        # 4. حدث تغيير محطة راديو السيارة
+                        if cj_in_car and car_radio != prev_car_radio and prev_car_radio is not None and (now - last_radio_comment_time > 30.0):
                             last_radio_comment_time = now
                             station_info = RADIO_STATIONS.get(car_radio, {"name": "Radio", "genre": "Music"})
                             st_name = station_info.get("name", "Radio")
@@ -951,13 +968,27 @@ def main():
                                 trigger_llm_event(latest_game_context, "CJ just turned off the car radio. We are driving in quiet.")
                             else:
                                 trigger_llm_event(latest_game_context, f"CJ changed the radio station to {st_name} ({st_genre}).")
-                        elif (now - last_ambient_comment_time > 90.0) and threat_active == 0 and not cj_in_car and (now - last_autonomous_event_time > 45.0):
-                            last_ambient_comment_time = now
-                            trigger_llm_event(latest_game_context, f"We are casually walking together in {zone_name} during {time_period}. Make a brief, natural street remark about our surroundings.")
-                        elif prev_cj_wanted is not None and cj_wanted > prev_cj_wanted and cj_wanted >= 2:
+
+                        # 5. جسر ذاكرة الألم والإصابات الحادة (Pain Memory Bridge)
+                        if prev_cj_health is not None and (prev_cj_health - cj_health >= 25) and (now - last_pain_comment_time > 15.0):
+                            last_pain_comment_time = now
+                            c_name = brain.current_identity["name"] if brain.current_identity else "Companion"
+                            brain.db.record_memory(c_name, "combat_wound", f"CJ took heavy physical damage in {zone_name}", zone_name, emotional_impact=-0.02, model_id=npc_model)
+                            bridge_state["trust_level"] = f"{brain.get_current_trust():.2f}"
+                            ini.update_bridge_section(bridge_state)
+                            trigger_llm_event(latest_game_context, "CJ just took heavy damage! Warn him or shout to get behind cover!")
+
+                        # 6. تصعيد تنبيه الشرطة
+                        if prev_cj_wanted is not None and cj_wanted > prev_cj_wanted and cj_wanted >= 2:
                             if brain.current_mode == "emote":
                                 set_active_mode("combat")
                             log(f"[LOCAL TACTICS] Police alert level raised to {cj_wanted} stars.")
+
+                        # 7. الحديث العفوي عند الهدوء
+                        if (now - last_ambient_comment_time > 90.0) and threat_active == 0 and not cj_in_car and (now - last_autonomous_event_time > 45.0):
+                            last_ambient_comment_time = now
+                            trigger_llm_event(latest_game_context, f"We are casually walking together in {zone_name} during {time_period}. Make a brief, natural street remark about our surroundings.")
+
                     elif npc_active == 0 and prev_npc_active == 1:
                         # تحرير الرفيق أو موته: إعادة ضبط كاملة وفورية
                         log("====================================================================")

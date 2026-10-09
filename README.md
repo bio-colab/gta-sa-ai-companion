@@ -171,7 +171,7 @@ pip install -r requirements.txt
 Copy `.env.example` to `AINPC/.env` and insert your Groq API key:
 ```env
 GROQ_API_KEY=gsk_your_groq_api_key_here
-GROQ_MODEL=qwen/qwen3.8-27b
+GROQ_MODEL=llama-3.3-70b-versatile
 GROQ_STT_MODEL=whisper-large-v3-turbo
 ```
 

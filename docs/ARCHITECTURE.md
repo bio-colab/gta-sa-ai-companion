@@ -125,39 +125,31 @@ All opcodes used have been audited for vanilla GTA San Andreas v1.0 US compatibi
 Episodic memory runs on SQLite with zero external dependencies:
 
 ```sql
--- Conversations Table
-CREATE TABLE IF NOT EXISTS conversations (
+-- Characters Table (Tied to model_id and ped demographics)
+CREATE TABLE IF NOT EXISTS characters (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ped_model INTEGER,
-    ped_name TEXT,
-    role TEXT,
-    content TEXT,
-    action_taken TEXT,
-    mode TEXT,
-    zone TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
-);
-
--- Relationships Table
-CREATE TABLE IF NOT EXISTS relationships (
-    ped_model INTEGER PRIMARY KEY,
-    ped_name TEXT,
-    relationship_score INTEGER DEFAULT 50,  -- 0 (hated) to 100 (best friend)
-    trust_level INTEGER DEFAULT 50,
+    model_id INTEGER,
+    name TEXT,
+    archetype TEXT,
+    trust_score REAL DEFAULT 0.5,
+    bravery REAL DEFAULT 0.5,
     times_recruited INTEGER DEFAULT 1,
-    last_seen DATETIME DEFAULT CURRENT_TIMESTAMP,
-    personality_traits TEXT,
-    notes TEXT
+    first_met TIMESTAMP,
+    last_seen TIMESTAMP,
+    persona TEXT DEFAULT '',
+    persona_custom TEXT DEFAULT ''
 );
 
--- Incidents & Shared Events
-CREATE TABLE IF NOT EXISTS incidents (
+-- Memories & Shared Incidents Table
+CREATE TABLE IF NOT EXISTS memories (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ped_model INTEGER,
-    incident_type TEXT, -- 'car_crash', 'police_shootout', 'driveby', 'rescue'
-    severity INTEGER,
+    character_name TEXT,
+    event_type TEXT, -- 'chat', 'recruit', 'crash', 'combat', 'pain', 'spatial'
+    description TEXT,
     zone TEXT,
-    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+    timestamp TIMESTAMP,
+    emotional_impact REAL DEFAULT 0.0,
+    FOREIGN KEY(character_name) REFERENCES characters(name)
 );
 ```
 
