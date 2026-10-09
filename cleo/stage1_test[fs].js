@@ -263,8 +263,17 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
 
     try {
         let ped = World.GetRandomCharInSphereNoSaveRecursive(pPos.x, pPos.y, pPos.z, maxRadius, false, 1);
-        while (ped && Char.DoesExist(ped) && !Char.IsDead(ped)) {
-            if (ped !== playerChar && ped !== activePed) {
+        while (ped && Char.DoesExist(ped)) {
+            let isDead = false;
+            let hp = 0;
+            try {
+                isDead = Char.IsDead(ped);
+                hp = ped.getHealth();
+            } catch (_) {
+                isDead = true;
+            }
+
+            if (!isDead && hp > 0 && ped !== playerChar && ped !== activePed) {
                 let isEnemy = false;
 
                 // 1. هل الشخص ألحق ضرراً باللاعب أو المرافق؟
@@ -611,6 +620,7 @@ while (true) {
                             }
                             activePed.clearTasksImmediately();
                             Task.KillCharOnFoot(activePed, threat);
+                            currentThreatChar = threat;
                             Text.PrintStringNow("~r~[AI COMBAT] Engaging target!~w~", 3500);
                             log("[AI ACTION] NPC engaging hostile target on foot.");
                         } else {
@@ -1288,10 +1298,37 @@ while (true) {
             if (!carFetchActive && now - lastThreatCheck > 500) {
                 lastThreatCheck = now;
                 try {
+                    // فحص فوري: إذا كان الهدف الحالي قد مات أو اختفى، نوقف إطلاق النار فوراً
+                    if (currentThreatChar !== null) {
+                        let threatDead = true;
+                        try {
+                            if (Char.DoesExist(currentThreatChar) && !Char.IsDead(currentThreatChar) && currentThreatChar.getHealth() > 0) {
+                                threatDead = false;
+                            }
+                        } catch (_) {
+                            threatDead = true;
+                        }
+
+                        if (threatDead) {
+                            currentThreatChar = null;
+                            try {
+                                if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
+                                    activePed.clearTasksImmediately();
+                                    let grp = player.getGroup();
+                                    grp.setLeader(playerChar);
+                                    grp.setDefaultTaskAllocator(0);
+                                    grp.setFollowStatus(true);
+                                    grp.setMember(activePed);
+                                }
+                            } catch (_) {}
+                            log("[AI COMBAT] Active threat killed or despawned. Stopped combat tasks immediately.");
+                        }
+                    }
+
                     let threatScanRadius = (currentNpcPersona === "hitman" || currentNpcPersona === "heavy") ? 65.0 : 45.0;
                     let threat = findNearbyThreat(playerChar, activePed, threatScanRadius);
 
-                    if (threat && Char.DoesExist(threat) && !Char.IsDead(threat)) {
+                    if (threat && Char.DoesExist(threat) && !Char.IsDead(threat) && threat.getHealth() > 0) {
                         currentThreatChar = threat;
 
                         // 1. تكتيكات الشخصية أثناء التواجد في المركبة (In-Vehicle Persona Tactics)
@@ -1401,15 +1438,35 @@ while (true) {
                             }
                         }
                     } else {
-                        // زوال الخطر: إعادة الشخصية لتبعية CJ المباشرة
+                        // زوال الخطر: تنظيف فوري لمهام إطلاق النار وإعادة التبعية لـ CJ
                         if (currentThreatChar !== null) {
                             currentThreatChar = null;
-                            if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
-                                let grp = player.getGroup();
-                                grp.setMember(activePed);
-                                log("[AI COMBAT] Threat eliminated or out of range. Restored group follow.");
-                            }
+                            try {
+                                if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
+                                    activePed.clearTasksImmediately();
+                                    let grp = player.getGroup();
+                                    grp.setLeader(playerChar);
+                                    grp.setDefaultTaskAllocator(0);
+                                    grp.setFollowStatus(true);
+                                    grp.setMember(activePed);
+                                }
+                            } catch (_) {}
+                            log("[AI COMBAT] Threat eliminated or out of range. Cleared combat tasks and restored group follow.");
                         }
+
+                        // حارس الأمان (Ghost / Ground Shooting Watchdog):
+                        // إذا انتهى الخطر تماماً ولكن المرافق ما زال يعلق في وضعية إطلاق النار نحو الأرض:
+                        try {
+                            if (!playerChar.isInAnyCar() && !activePed.isInAnyCar() && activePed.isShooting()) {
+                                activePed.clearTasksImmediately();
+                                let grp = player.getGroup();
+                                grp.setLeader(playerChar);
+                                grp.setDefaultTaskAllocator(0);
+                                grp.setFollowStatus(true);
+                                grp.setMember(activePed);
+                                log("[AI COMBAT WATCHDOG] Aborted ground/ghost shooting. Reset companion to group follow.");
+                            }
+                        } catch (_) {}
                     }
                 } catch (e) {
                     // صامت لحماية اللعبة
