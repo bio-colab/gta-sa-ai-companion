@@ -87,19 +87,27 @@ class MemoryDB:
                     except Exception:
                         pass
 
-                # جدول الذكريات والأحداث المشتركة
+                # جدول الذكريات والأحداث المشتركة (مربوط بـ model_id لمنع تصادم الأسماء المتكررة)
                 cursor.execute("""
                 CREATE TABLE IF NOT EXISTS memories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_id INTEGER,
                     character_name TEXT,
                     event_type TEXT,
                     description TEXT,
                     zone TEXT,
                     timestamp TIMESTAMP,
-                    emotional_impact REAL DEFAULT 0.0,
-                    FOREIGN KEY(character_name) REFERENCES characters(name)
+                    emotional_impact REAL DEFAULT 0.0
                 );
                 """)
+
+                cursor.execute("PRAGMA table_info(memories);")
+                mem_cols = [col[1] for col in cursor.fetchall()]
+                if "model_id" not in mem_cols:
+                    try:
+                        cursor.execute("ALTER TABLE memories ADD COLUMN model_id INTEGER;")
+                    except Exception:
+                        pass
                 conn.commit()
 
     def get_or_register_character(self, model_id: int, name: str, archetype: str) -> Dict[str, Any]:
@@ -185,17 +193,18 @@ class MemoryDB:
                     return {"persona": row["persona"] or "", "persona_custom": row["persona_custom"] or ""}
                 return {"persona": "", "persona_custom": ""}
 
-    def record_memory(self, character_name: str, event_type: str, description: str, zone: str, emotional_impact: float = 0.0, model_id: Optional[int] = None):
-        """تسجيل ذكرى أو موقف مشترك بين CJ والـ NPC مع أثره العاطفي وربطه بالـ model_id"""
+    def record_memory(self, character_name: str, event_type: str, description: str, zone: str, emotional_impact: float = 0.0, model_id: Optional[int] = None) -> float:
+        """تسجيل ذكرى أو موقف مشترك بين CJ والـ NPC مع أثره العاطفي وربطه بالـ model_id وإرجاع رصيد الثقة المحدث"""
         now = datetime.now().isoformat()
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
                 cursor.execute("""
-                INSERT INTO memories (character_name, event_type, description, zone, timestamp, emotional_impact)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """, (character_name, event_type, description, zone, now, emotional_impact))
+                INSERT INTO memories (model_id, character_name, event_type, description, zone, timestamp, emotional_impact)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (model_id, character_name, event_type, description, zone, now, emotional_impact))
 
+                new_trust = 0.5
                 # تحديث مقياس الثقة (Trust Score) تدريجياً وبشكل ملموس بناءً على model_id لمنع تصادم الأسماء
                 if emotional_impact != 0.0:
                     if model_id is not None:
@@ -204,14 +213,28 @@ class MemoryDB:
                         SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
                         WHERE model_id = ?
                         """, (emotional_impact, model_id))
+                        cursor.execute("SELECT trust_score FROM characters WHERE model_id = ?", (model_id,))
                     else:
                         cursor.execute("""
                         UPDATE characters
                         SET trust_score = MAX(0.0, MIN(1.0, ROUND(trust_score + ?, 3)))
                         WHERE name = ?
                         """, (emotional_impact, character_name))
+                        cursor.execute("SELECT trust_score FROM characters WHERE name = ?", (character_name,))
+                    row = cursor.fetchone()
+                    if row and row["trust_score"] is not None:
+                        new_trust = float(row["trust_score"])
+                else:
+                    if model_id is not None:
+                        cursor.execute("SELECT trust_score FROM characters WHERE model_id = ?", (model_id,))
+                    else:
+                        cursor.execute("SELECT trust_score FROM characters WHERE name = ?", (character_name,))
+                    row = cursor.fetchone()
+                    if row and row["trust_score"] is not None:
+                        new_trust = float(row["trust_score"])
 
                 conn.commit()
+                return new_trust
 
     def update_trust(self, model_id_or_name: Any, delta: float) -> float:
         """تعديل مقياس الثقة مباشرة (زيادة أو نقصان) وربطه برقم الموديل لمنع تلوث الشخصيات"""
@@ -251,17 +274,25 @@ class MemoryDB:
                 """)
                 conn.commit()
 
-    def get_recent_memories(self, character_name: str, limit: int = 3, persona_filter: Optional[str] = None) -> List[str]:
-        """استرجاع أحدث الذكريات المشتركة مع فلترة ذكية حسب الشخصية النشطة لمنع تداخل الأدوار"""
+    def get_recent_memories(self, character_name: str, limit: int = 3, persona_filter: Optional[str] = None, model_id: Optional[int] = None) -> List[str]:
+        """استرجاع أحدث الذكريات المشتركة مع فلترة ذكية حسب الشخصية النشطة و model_id"""
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                SELECT description, zone, event_type 
-                FROM memories 
-                WHERE character_name = ? 
-                ORDER BY id DESC LIMIT 15
-                """, (character_name,))
+                if model_id is not None:
+                    cursor.execute("""
+                    SELECT description, zone, event_type 
+                    FROM memories 
+                    WHERE model_id = ? OR character_name = ?
+                    ORDER BY id DESC LIMIT 15
+                    """, (model_id, character_name))
+                else:
+                    cursor.execute("""
+                    SELECT description, zone, event_type 
+                    FROM memories 
+                    WHERE character_name = ? 
+                    ORDER BY id DESC LIMIT 15
+                    """, (character_name,))
                 rows = cursor.fetchall()
 
                 filtered = []
@@ -292,16 +323,23 @@ class MemoryDB:
 
                 return filtered
 
-    def get_zone_memories(self, character_name: str, zone: str, limit: int = 2) -> List[str]:
-        """استرجاع ذكريات مرتبطة بموقع مكاني محدد (Spatial Anchoring)"""
+    def get_zone_memories(self, character_name: str, zone: str, limit: int = 2, model_id: Optional[int] = None) -> List[str]:
+        """استرجاع ذكريات مرتبطة بموقع مكاني محدد (Spatial Anchoring) بدقة model_id"""
         with self.lock:
             with self._get_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("""
-                SELECT description FROM memories 
-                WHERE character_name = ? AND zone = ? 
-                ORDER BY id DESC LIMIT ?
-                """, (character_name, zone, limit))
+                if model_id is not None:
+                    cursor.execute("""
+                    SELECT description FROM memories 
+                    WHERE (model_id = ? OR character_name = ?) AND zone = ? 
+                    ORDER BY id DESC LIMIT ?
+                    """, (model_id, character_name, zone, limit))
+                else:
+                    cursor.execute("""
+                    SELECT description FROM memories 
+                    WHERE character_name = ? AND zone = ? 
+                    ORDER BY id DESC LIMIT ?
+                    """, (character_name, zone, limit))
                 rows = cursor.fetchall()
                 return [r["description"] for r in rows]
 

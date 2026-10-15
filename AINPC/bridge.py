@@ -470,6 +470,8 @@ def format_telemetry(ini_mgr: SafeIniManager) -> str:
     car_radio = ini_mgr.get_int("GAME", "car_radio", -1)
     threat_active = ini_mgr.get_int("GAME", "threat_active", 0)
     car_crashed = ini_mgr.get_int("GAME", "car_crashed", 0)
+    on_mission = ini_mgr.get_int("GAME", "on_mission", 0)
+    car_speed = ini_mgr.get_float("GAME", "car_speed", 0.0)
 
     time_period = get_time_period(clock_hour)
     weather_name = WEATHER_NAMES.get(weather_id, "Clear / Normal")
@@ -477,8 +479,11 @@ def format_telemetry(ini_mgr: SafeIniManager) -> str:
 
     npc_active = ini_mgr.get_int("GAME", "npc_active", 0)
 
+    speed_str = f" | Speed: {car_speed * 3.6:.0f} km/h" if (cj_in_car and car_speed > 1.0) else ""
+    mission_str = " | [MISSION ACTIVE]" if on_mission else ""
+
     lines = [
-        f"  [CJ]  Zone: {zone_name} | HP: {cj_health}% | Armor: {cj_armor}% | Gun: {weapon_name} | Wanted: {stars_str} | Mode: {car_str}",
+        f"  [CJ]  Zone: {zone_name} | HP: {cj_health}% | Armor: {cj_armor}% | Gun: {weapon_name} | Wanted: {stars_str} | Mode: {car_str}{speed_str}{mission_str}",
         f"  [ENV] Time: {clock_hour:02d}:{clock_min:02d} ({time_period}) | Weather: {weather_name} | Radio: {radio_name if cj_in_car else 'N/A'}"
     ]
 
@@ -540,9 +545,14 @@ def input_thread_func():
                 print("  Core Archetypes: hitman | medic | heavy | driver | girlfriend", flush=True)
                 print("  Assign in-game or console via: /persona <role> (e.g. '/persona hitman', '/persona medic')", flush=True)
                 print("  Or custom free-form instruction: /persona You are a loyal Russian bodyguard...\n", flush=True)
-            elif apply_persona_command(text):
+            try:
+                if apply_persona_command(text):
+                    continue
+            except Exception as pe:
+                log(f"[INPUT ERROR] apply_persona_command error: {pe}")
                 continue
-            elif text.startswith("mode "):
+
+            if text.startswith("mode "):
                 target_m = text[5:].strip().lower()
                 if target_m in ["social", "chill", "dance", "feelings"]:
                     target_m = "emote"
@@ -568,6 +578,8 @@ def input_thread_func():
                     queue_action("heal")
                 elif cmd in ["rifle", "m4", "arm_rifle"]:
                     queue_action("arm_rifle")
+                elif cmd in ["ak47", "arm_ak47", "ak"]:
+                    queue_action("arm_ak47")
                 elif cmd in ["pistol", "deagle", "arm_pistol"]:
                     queue_action("arm_pistol")
                 elif cmd in ["smg", "uzi", "arm_smg"]:
@@ -595,7 +607,7 @@ def input_thread_func():
                     queue_action("attack")
                 elif cmd in ["follow", "follow_player", "return", "stop", "cancel", "come"]:
                     queue_action("follow_player")
-                elif cmd in ["dance", "dance_female", "dance_male", "flirt", "kiss", "drunk", "act_drunk", "drink", "sober", "sober_up", "gang", "gang_sign", "reppin", "smoke", "cigarette", "cheer", "clap", "cower"]:
+                elif cmd in ["dance", "dance_female", "dance_male", "flirt", "kiss", "cuddle", "strip", "lapdance", "drunk", "act_drunk", "drink", "sober", "sober_up", "gang", "gang_sign", "reppin", "smoke", "cigarette", "cheer", "clap", "cower"]:
                     if brain.current_mode != "emote":
                         print(f"\n[AI GUARD] Action '{cmd}' requires EMOTE mode! Auto-activating EMOTE mode...", flush=True)
                         set_active_mode("emote")
@@ -622,15 +634,16 @@ def input_thread_func():
                 print("\n[Commands]:", flush=True)
                 print("  mode                  -> Show active layer/mode (companion/combat/vehicle/emote)", flush=True)
                 print("  mode <name>           -> Switch active mode (e.g. 'mode emote', 'mode combat')", flush=True)
-                print("  act <fetch_car|drive|exit|arm_rifle|heal|dance|flirt|drunk|sober|gang|smoke|cheer|cower> -> Actions", flush=True)
+                print("  act <fetch_car|drive|exit|arm_rifle|arm_ak47|heal|dance|flirt|cuddle|strip|lapdance|drunk|sober|gang|smoke|cheer|cower> -> Actions", flush=True)
                 print("  say <text>            -> Force immediate subtitle on game screen", flush=True)
                 print("  status                -> Print current in-game telemetry snapshot", flush=True)
                 print("  help                  -> Show this help message\n", flush=True)
             else:
                 log(f"[USER -> AI NPC] \"{text}\"")
                 trigger_llm_prompt(text)
-        except Exception:
-            break
+        except Exception as e:
+            log(f"[INPUT THREAD WARNING] {e}")
+            time.sleep(0.2)
 
 def main():
     global say_fifo, action_fifo, in_flight_say, in_flight_action, latest_game_context, bridge_state, say_counter, action_counter
@@ -876,6 +889,8 @@ def main():
                     car_crashed = ini.get_int("GAME", "car_crashed", 0)
                     crash_severity = ini.get_int("GAME", "crash_severity", 0)
                     threat_active = ini.get_int("GAME", "threat_active", 0)
+                    on_mission = ini.get_int("GAME", "on_mission", 0)
+                    car_speed = ini.get_float("GAME", "car_speed", 0.0)
 
                     time_period = get_time_period(clock_hour)
                     time_str = f"{clock_hour:02d}:{clock_min:02d} ({time_period})"
@@ -901,8 +916,11 @@ def main():
                         "zone": zone_name,
                         "time_str": time_str,
                         "weather_str": weather_str,
+                        "weather_id": weather_id,
                         "radio_station": radio_str,
                         "threat_state": threat_str,
+                        "on_mission": bool(on_mission),
+                        "car_speed": round(car_speed, 1),
                         "nearest_food": spatial["nearest_food"],
                         "nearest_weapons": spatial["nearest_weapons"],
                         "nearest_hospital": spatial["nearest_hospital"],

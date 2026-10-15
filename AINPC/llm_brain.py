@@ -8,8 +8,7 @@ import re
 import json
 import sys
 import time
-import urllib.request
-import urllib.error
+import requests
 from typing import Dict, Any, Optional, Tuple, List
 try:
     from AINPC.memory_db import MemoryDB
@@ -22,14 +21,22 @@ except ImportError:
 
 ENV_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
 
-NEGATION_WORDS = ["don't", "dont", "never", "stop", "quit", "cancel", "لا", "ما ت", "بدون", "توقف", "انتبه", "كفى"]
+NEGATION_PATTERNS = [
+    r'\b(don\'t|dont|never|not|no|without)\b',
+    r'(?:^|\s)(?:لا|ما|لن|مش|بدون)(?:\s+|$)',
+    r'(?:^|\s)لا\s+ت\w+',  # مثل: لا تطلق، لا تقاتل، لا تركب
+    r'(?:^|\s)ما\s+ت\w+',  # مثل: ما تطلق، ما تسوق
+]
 
 def is_negated(text: str) -> bool:
-    """كاشف النفي لمنع تفعيل الأوضاع عند طلب التوقف أو النهي مثل don't shoot أو لا تطلق"""
+    """كاشف النفي الدقيق لمنع تفعيل الأوضاع عند طلب النهي مثل don't shoot أو لا تطلق"""
     if not text:
         return False
-    t = text.lower()
-    return any(n in t for n in NEGATION_WORDS)
+    t = text.lower().strip()
+    for pattern in NEGATION_PATTERNS:
+        if re.search(pattern, t):
+            return True
+    return False
 
 def has_intent_word(text: str, keywords: list) -> bool:
     """فحص نية اللاعب بدقة حدود الكلمات (Regex Word Boundaries) لمنع المطابقة الجزئية الخاطئة مثل car في care"""
@@ -55,13 +62,19 @@ def has_intent_word(text: str, keywords: list) -> bool:
 
 def load_env() -> Dict[str, str]:
     env = {}
-    if os.path.exists(ENV_PATH):
-        with open(ENV_PATH, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    env[k.strip()] = v.strip()
+    paths = [
+        ENV_PATH,
+        os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    ]
+    for p in paths:
+        if os.path.exists(p):
+            with open(p, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        if k.strip() not in env:
+                            env[k.strip()] = v.strip()
     return env
 
 VALID_MODES = ["companion", "combat", "vehicle", "emote"]
@@ -71,7 +84,7 @@ MODE_ACTIONS = {
         "follow_player", "look_at_player", "face_player", "heal", "attack_threat", "none"
     ],
     "combat": [
-        "arm_rifle", "arm_pistol", "arm_smg", "arm_uzi", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
+        "arm_rifle", "arm_ak47", "arm_pistol", "arm_smg", "arm_uzi", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
     ],
     "vehicle": [
         "fetch_car", "drive_wander", "drive_to_target", "driveby", "exit_car", "follow_player", "none"
@@ -94,7 +107,18 @@ class LLMBrain:
         self.current_mode = "companion"
         self.current_persona = None
         self.session_memories: List[str] = []
+        self.session_turns: List[Dict[str, str]] = []
         self._call_timestamps: List[float] = []
+
+        # جلسة HTTP متصلة مستدامة (Keep-Alive Connection Pooling) لتسريع الاستجابة
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=1)
+        self.session.mount("https://", adapter)
+        self.session.headers.update({
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "GTA-SA-AI-NPC/3.0"
+        })
 
     def is_configured(self) -> bool:
         return bool(self.api_key and self.api_key.startswith("gsk_"))
@@ -114,6 +138,7 @@ class LLMBrain:
         self.current_persona = None
         self.current_mode = "companion"
         self.session_memories.clear()
+        self.session_turns.clear()
 
     def get_or_create_identity(self, model_id: int) -> dict:
         """تخصيص هوية وشخصية واقعية مع ربطها بالملف الديمغرافي والذاكرة الدائمة SQLite"""
@@ -163,9 +188,12 @@ class LLMBrain:
         """تحديث رصيد الثقة للشخصية الحالية فور وقوع أحداث مؤثرة (مثل القيادة المتهورة أو الإنقاذ)"""
         if self.current_identity:
             npc_name = self.current_identity.get("name")
+            npc_model = self.current_identity.get("model", 0)
             if npc_name:
-                new_t = self.db.update_trust(npc_name, delta)
+                new_t = self.db.update_trust(npc_name, delta, model_id=npc_model)
                 self.current_identity["trust_score"] = new_t
+                if reason:
+                    self.db.record_memory(npc_name, "trust_event", reason, "San Andreas", emotional_impact=delta, model_id=npc_model)
                 return new_t
         return 0.5
 
@@ -232,31 +260,34 @@ class LLMBrain:
         npc_dist = context.get("npc_dist", 2.0)
         npc_model = context.get("npc_model", 107)
 
-        # فحص إشارات تبديل المود التلقائية مع حارس النفي ومنع الكلمات الفضفاضة
-        prompt_lower = (user_prompt or "").lower()
-        if not is_negated(prompt_lower):
+        # فحص إشارات تبديل المود التلقائية
+        prompt_lower = (user_prompt or "").lower().strip()
+
+        # 1. أوامر العودة للمرافقة الطبيعية والتوقف (تُفحص أولاً ومستقلة عن كاشف النفي)
+        if has_intent_word(prompt_lower, [
+            "الوضع العادي", "مود المرافقة", "اتبعني", "الحقني", "تعال", "ارجع", "قف", "توقف", "اثبت", "إلغاء", "كفى", "بس",
+            "normal mode", "companion mode", "follow me", "regroup", "come back", "stay here", "hold position", "stop", "cancel", "cease"
+        ]):
+            self.current_mode = "companion"
+        elif not is_negated(prompt_lower):
+            # 2. فحص الأوضاع التخصصية طالما أن الأمر ليس نهياً (مثل don't shoot أو لا تطلق)
             if has_intent_word(prompt_lower, [
-                "ارقص", "دانس", "دخن", "تدخين", "تغزل", "صفق", "تصفيق",
+                "ارقص", "دانس", "دخن", "تدخين", "تغزل", "صفق", "تصفيق", "تعري", "استعراض", "قبلني", "حضن",
                 "مود المشاعر", "وضع المشاعر", "مود الرقص", "وضع الرقص", "مود السكر", "فعّل المشاعر",
-                "emote mode", "social mode", "chill mode", "dance mode", "party mode", "activate emote", "switch to emote"
+                "emote mode", "social mode", "chill mode", "dance mode", "party mode", "activate emote", "switch to emote", "strip", "lapdance"
             ]):
                 self.current_mode = "emote"
             elif has_intent_word(prompt_lower, [
-                "مود القتال", "وضع القتال", "استعد للحرب", "جهّز السلاح", "اطلق النار", "اطلق من النافذة", "درايف باي",
-                "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "open fire"
+                "مود القتال", "وضع القتال", "استعد للحرب", "جهّز السلاح", "اطلق النار", "اطلق من النافذة", "درايف باي", "سلاح", "اسلحة",
+                "combat mode", "war mode", "gear up", "strap up", "get strapped", "ready for war", "driveby", "drive by", "open fire", "take them down"
             ]):
                 self.current_mode = "combat"
             elif has_intent_word(prompt_lower, [
                 "جيب سيارة", "احضر سيارة", "سرق سيارة", "قد السيارة", "اركب السيارة", "اركبي", "انزل من السيارة",
-                "مود القيادة", "وضع القيادة", "جلب السيارة",
-                "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive to target", "drive to marker"
+                "مود القيادة", "وضع القيادة", "جلب السيارة", "سوق",
+                "drive mode", "vehicle mode", "bring car", "fetch car", "bring me that car", "get the car", "steal a car", "jack that car", "drive to target", "drive to marker", "take the wheel"
             ]):
                 self.current_mode = "vehicle"
-            elif has_intent_word(prompt_lower, [
-                "الوضع العادي", "مود المرافقة", "اتبعني", "الحقني", "تعال", "ارجع", "قف", "توقف", "اثبت", "إلغاء",
-                "normal mode", "companion mode", "follow me", "regroup", "come back", "stay here", "hold position"
-            ]):
-                self.current_mode = "companion"
 
         allowed_actions = MODE_ACTIONS.get(self.current_mode, MODE_ACTIONS["companion"])
         allowed_actions_str = ", ".join([f'"{a}"' for a in allowed_actions])
@@ -369,20 +400,26 @@ class LLMBrain:
             user_content = f"Current Game State: [{world_state}]\nCJ says to you: \"{user_prompt}\"\nRespond now as JSON:"
             # تسجيل المحادثة في الذاكرة دون تضخيم الثقة (عائد متناقص شبه معدوم للحوار العادي)
             chat_trust_bonus = max(0.0, round(0.003 * (1.0 - trust_val), 4))
-            self.db.record_memory(npc_name, "dialogue", f"CJ spoke with me: \"{user_prompt[:40]}\"", zone, emotional_impact=chat_trust_bonus, model_id=npc_model)
+            new_trust = self.db.record_memory(npc_name, "dialogue", f"CJ spoke with me: \"{user_prompt[:40]}\"", zone, emotional_impact=chat_trust_bonus, model_id=npc_model)
+            if self.current_identity and isinstance(new_trust, (int, float)):
+                self.current_identity["trust_score"] = new_trust
         else:
             event_desc = context.get("event_desc", "Observing the situation")
             user_content = f"Current Game State: [{world_state}]\nEvent Occurred: {event_desc}\nReact briefly as JSON:"
             # تسجيل الحدث البارز فقط
             join_bonus = 0.02 if "joined" in event_desc else 0.0
-            self.db.record_memory(npc_name, "event", event_desc, zone, emotional_impact=join_bonus, model_id=npc_model)
+            new_trust = self.db.record_memory(npc_name, "event", event_desc, zone, emotional_impact=join_bonus, model_id=npc_model)
+            if self.current_identity and isinstance(new_trust, (int, float)):
+                self.current_identity["trust_score"] = new_trust
+
+        messages = [{"role": "system", "content": system_prompt}]
+        for turn in self.session_turns[-4:]:
+            messages.append(turn)
+        messages.append({"role": "user", "content": user_content})
 
         payload = {
             "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_content}
-            ],
+            "messages": messages,
             "temperature": 0.6,
             "max_tokens": 100,
             "response_format": {"type": "json_object"}
@@ -392,20 +429,11 @@ class LLMBrain:
         max_retries = 2
         for attempt in range(max_retries + 1):
             try:
-                req = urllib.request.Request(
-                    self.endpoint,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                        "User-Agent": "GTA-SA-AI-NPC/3.0"
-                    },
-                    method="POST"
-                )
+                resp = self.session.post(self.endpoint, json=payload, timeout=6.0)
+                self.last_response_time = (time.time() - start_t) * 1000
 
-                with urllib.request.urlopen(req, timeout=6.0) as resp:
-                    self.last_response_time = (time.time() - start_t) * 1000
-                    data = json.loads(resp.read().decode("utf-8"))
+                if resp.status_code == 200:
+                    data = resp.json()
                     content = data["choices"][0]["message"]["content"].strip()
 
                     parsed = json.loads(content)
@@ -458,24 +486,24 @@ class LLMBrain:
                     if user_prompt:
                         self.session_memories.append(f"CJ: \"{user_prompt}\" -> You: \"{say_clean}\"")
                         self.session_memories = self.session_memories[-6:]
+                        self.session_turns.append({"role": "user", "content": f"CJ: \"{user_prompt}\""})
+                        self.session_turns.append({"role": "assistant", "content": json.dumps({"say": say_clean, "action": action})})
+                        self.session_turns = self.session_turns[-6:]
 
                     return (say_clean, action, self.current_mode)
-
-            except urllib.error.HTTPError as e:
-                err_body = e.read().decode("utf-8", errors="replace")
-                print(f"[LLM API ERROR] HTTP {e.code} (Attempt {attempt+1}/{max_retries+1}): {err_body[:100]}", file=sys.stderr)
-                if e.code in [429, 500, 502, 503, 504] and attempt < max_retries:
+                elif resp.status_code in [429, 500, 502, 503, 504] and attempt < max_retries:
                     time.sleep(1.0 * (attempt + 1))
                     continue
-                fallback = self._get_fallback_speech()
-                return (fallback, "none", self.current_mode)
+                else:
+                    print(f"[LLM API ERROR] HTTP {resp.status_code} (Attempt {attempt+1}/{max_retries+1}): {resp.text[:100]}", file=sys.stderr)
+                    return (self._get_fallback_speech(), "none", self.current_mode)
+
             except Exception as e:
                 print(f"[LLM NET ERROR] {e} (Attempt {attempt+1}/{max_retries+1})", file=sys.stderr)
                 if attempt < max_retries:
                     time.sleep(1.0 * (attempt + 1))
                     continue
-                fallback = self._get_fallback_speech()
-                return (fallback, "none", self.current_mode)
+                return (self._get_fallback_speech(), "none", self.current_mode)
 
 if __name__ == "__main__":
     brain = LLMBrain()

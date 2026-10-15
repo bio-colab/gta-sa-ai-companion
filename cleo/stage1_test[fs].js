@@ -46,6 +46,23 @@ function isKeyJustPressedCustom(vk) {
     }
 }
 
+function getHandle(entity) {
+    if (!entity) return 0;
+    if (typeof entity === "number") return entity;
+    if (entity.handle !== undefined) return entity.handle;
+    if (typeof entity.getHandle === "function") {
+        try { return entity.getHandle(); } catch (_) {}
+    }
+    return 0;
+}
+
+function isSameEntity(a, b) {
+    if (a === b) return true;
+    let ha = getHandle(a);
+    let hb = getHandle(b);
+    return ha !== 0 && ha === hb;
+}
+
 function setPlayerControlSafe(playerObj, enabled) {
     try {
         if (playerObj && typeof playerObj.setControl === "function") {
@@ -63,9 +80,13 @@ function safeGtaString(str) {
 function setTypingLock(playerObj, charObj, lockState) {
     try {
         if (charObj && Char.DoesExist(charObj)) {
-            charObj.freezePosition(lockState);
-            if (lockState) {
-                charObj.clearTasksImmediately();
+            let inCar = false;
+            try { inCar = charObj.isInAnyCar(); } catch (_) {}
+            if (!inCar) {
+                charObj.freezePosition(lockState);
+                if (lockState) {
+                    charObj.clearTasksImmediately();
+                }
             }
         }
         if (playerObj) {
@@ -111,7 +132,7 @@ function updateCompanionBlip(playerChar, activePed) {
             if (isPlayerInCar) {
                 let pCar = playerChar.getCarIsUsing();
                 let nCar = activePed.getCarIsUsing();
-                if (pCar && nCar && pCar === nCar) {
+                if (pCar && nCar && isSameEntity(pCar, nCar)) {
                     // كلاهما في نفس السيارة معاً -> إخفاء العلامة تماماً لمنع أي سهم فوق السيارة
                     desiredDisplay = 0; // 0 = NEITHER
                 } else {
@@ -258,12 +279,8 @@ function findNearbyHostileVehicle(centerX, centerY, centerZ, maxRadius) {
 // فحص ما إذا كان الهدف قد هاجم اللاعب أو المرافق مؤخراً خلال نافذة الذاكرة (10 ثوانٍ) لمنع تراكم الضرر الأبدي
 function isRecentAttacker(ped, now, playerChar, activePed) {
     if (!ped || !Char.DoesExist(ped)) return false;
-    let handle = 0;
-    try {
-        handle = ped.getHandle ? ped.getHandle() : (ped + 0);
-    } catch (_) {
-        return false;
-    }
+    let handle = getHandle(ped);
+    if (!handle || handle === 0) return false;
 
     let isDamaged = false;
     try {
@@ -336,7 +353,7 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
             }
 
             // التأكد من أن الشخص حي وصحته > 5 وأنه ليس اللاعب ولا المرافق ولا الهدف الميت مسبقاً
-            if (!isDead && hp > 5 && ped !== playerChar && ped !== activePed && ped !== lastKilledThreat) {
+            if (!isDead && hp > 5 && !isSameEntity(ped, playerChar) && !isSameEntity(ped, activePed) && !isSameEntity(ped, lastKilledThreat)) {
                 let pedPos = ped.getCoordinates();
                 let d = Math.hypot(pPos.x - pedPos.x, pPos.y - pedPos.y, pPos.z - pedPos.z);
                 let isEnemy = false;
@@ -551,10 +568,14 @@ while (true) {
                 } else if (actionCmd === "hands_up") {
                     Task.HandsUp(activePed, 3000);
                 } else if (actionCmd === "heal") {
+                    try {
+                        playerChar.setHealth(100);
+                        playerChar.addArmor(100);
+                    } catch (_) {}
                     activePed.setHealth(100);
                     activePed.addArmor(100);
                     Text.PrintStringNow("~g~[AI CHEAT] HESOYAM: Health & Armor Restored!~w~", 3000);
-                    log("[AI CHEAT] Executed HESOYAM on active NPC (Health=100, Armor=100)");
+                    log("[AI CHEAT] Executed HESOYAM on CJ and active NPC (Health=100, Armor=100)");
                 } else if (actionCmd === "arm_pistol") {
                     if (giveNpcWeapon(activePed, 24, 348, 250)) {
                         Text.PrintStringNow("~g~[AI ARMED] Desert Eagle equipped!~w~", 3000);
@@ -855,13 +876,13 @@ while (true) {
                     } catch (e) {
                         log(`[AI ERROR] Failed to dance: ${e}`);
                     }
-                } else if (actionCmd === "flirt" || actionCmd === "kiss") {
+                } else if (actionCmd === "flirt" || actionCmd === "kiss" || actionCmd === "cuddle") {
                     try {
                         let female = isPedFemale(activePed);
                         if (female) {
                             playNpcAnimation(activePed, "Grlfrd_Kiss_01", "KISSING", false, 4000);
                             Text.PrintStringNow("~p~[AI EMOTE] Greeting CJ with affection!~w~", 3500);
-                            log("[AI EMOTE] Female NPC greeting/flirting (Grlfrd_Kiss_01 / KISSING)");
+                            log("[AI EMOTE] Female NPC romance/cuddle (Grlfrd_Kiss_01 / KISSING)");
                         } else {
                             playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 3500);
                             Text.PrintStringNow("~g~[AI HOMIE] That's respect, CJ!~w~", 3500);
@@ -915,15 +936,15 @@ while (true) {
                     } catch (e) {
                         log(`[AI ERROR] Failed to cheer: ${e}`);
                     }
-                    } else if (actionCmd === "cower" || actionCmd === "scared" || actionCmd === "panic") {
-                        try {
-                            playNpcAnimation(activePed, "cower", "PED", false, 4000);
-                            Text.PrintStringNow("~r~[AI EMOTE] Cowering in fear!~w~", 3500);
-                            log("[AI EMOTE] NPC cowering in fear (cower / PED)");
-                        } catch (e) {
-                            log(`[AI ERROR] Failed to cower: ${e}`);
-                        }
+                } else if (actionCmd === "cower" || actionCmd === "scared" || actionCmd === "panic") {
+                    try {
+                        playNpcAnimation(activePed, "DUCK_cower", "PED", false, 4000);
+                        Text.PrintStringNow("~r~[AI EMOTE] Cowering in fear!~w~", 3500);
+                        log("[AI EMOTE] NPC cowering in fear (DUCK_cower / PED)");
+                    } catch (e) {
+                        log(`[AI ERROR] Failed to cower: ${e}`);
                     }
+                }
                 }
             }
             IniFile.WriteInt(actionId, INI_FILE, "GAME", "action_ack");
@@ -984,8 +1005,12 @@ while (true) {
             }
 
             if (isTypingMode) {
-                // منع أي مهام أو حركات جسدية لـ CJ أثناء الكتابة (عزل كامل)
-                playerChar.clearTasksImmediately();
+                // منع أي مهام أو حركات جسدية لـ CJ على الأقدام أثناء الكتابة (عزل كامل دون طرد اللاعب من السيارة)
+                try {
+                    if (!playerChar.isInAnyCar()) {
+                        playerChar.clearTasksImmediately();
+                    }
+                } catch (_) {}
 
                 // إلغاء الأمر عبر Escape (27)
                 if (isKeyJustPressedCustom(27)) {
@@ -1147,12 +1172,16 @@ while (true) {
             let carCrashedNow = 0;
             let crashDamage = 0;
 
+            let carSpeed = 0.0;
             if (cjInCar) {
                 let car = playerChar.getCarIsUsing();
                 if (car && Car.DoesExist(car)) {
                     cjCarModel = car.getModel();
                     try {
                         carRadio = Audio.GetRadioChannel();
+                    } catch (_) {}
+                    try {
+                        carSpeed = car.getSpeed();
                     } catch (_) {}
 
                     let curCarHp = car.getHealth();
@@ -1186,6 +1215,14 @@ while (true) {
             } catch (_) {}
 
             let weatherId = -1;
+            try {
+                weatherId = Memory.ReadI16(0xC81320, false);
+            } catch (_) {}
+
+            let onMission = 0;
+            try {
+                onMission = Memory.ReadU8(0xA49FC4, false);
+            } catch (_) {}
 
             let threatActive = (currentThreatChar !== null && Char.DoesExist(currentThreatChar) && !Char.IsDead(currentThreatChar)) ? 1 : 0;
 
@@ -1195,12 +1232,14 @@ while (true) {
             IniFile.WriteInt(cjWanted, INI_FILE, "GAME", "cj_wanted");
             IniFile.WriteInt(cjInCar ? 1 : 0, INI_FILE, "GAME", "cj_in_car");
             IniFile.WriteInt(cjCarModel, INI_FILE, "GAME", "cj_car_model");
+            IniFile.WriteFloat(parseFloat(carSpeed.toFixed(1)), INI_FILE, "GAME", "car_speed");
             IniFile.WriteInt(carRadio, INI_FILE, "GAME", "car_radio");
             IniFile.WriteInt(carCrashedNow, INI_FILE, "GAME", "car_crashed");
             IniFile.WriteInt(crashDamage, INI_FILE, "GAME", "crash_severity");
             IniFile.WriteInt(clockHour, INI_FILE, "GAME", "clock_hour");
             IniFile.WriteInt(clockMin, INI_FILE, "GAME", "clock_min");
             IniFile.WriteInt(weatherId, INI_FILE, "GAME", "weather_id");
+            IniFile.WriteInt(onMission, INI_FILE, "GAME", "on_mission");
             IniFile.WriteInt(threatActive, INI_FILE, "GAME", "threat_active");
             IniFile.WriteString(zoneName, INI_FILE, "GAME", "cj_zone");
             IniFile.WriteFloat(parseFloat(cjPos.x.toFixed(1)), INI_FILE, "GAME", "cj_x");
@@ -1421,7 +1460,7 @@ while (true) {
                         // 1. تكتيكات الشخصية أثناء التواجد في المركبة (In-Vehicle Persona Tactics)
                         if (playerChar.isInAnyCar() && activePed.isInAnyCar()) {
                             let playerCar = playerChar.getCarIsUsing();
-                            let isDriver = (playerCar && Car.DoesExist(playerCar) && playerCar.getDriver() === activePed);
+                            let isDriver = (playerCar && Car.DoesExist(playerCar) && isSameEntity(playerCar.getDriver(), activePed));
 
                             if (isDriver && currentNpcPersona === "driver") {
                                 // السائق المحترف: الهروب السريع والتفادي التلقائي عند التعرض لهجوم
@@ -1591,7 +1630,7 @@ while (true) {
 
                     log(`Closest ped check: handle = ${target}`);
 
-                    if (target && Char.DoesExist(target) && !Char.IsDead(target) && target !== playerChar) {
+                    if (target && Char.DoesExist(target) && !Char.IsDead(target) && !isSameEntity(target, playerChar)) {
                         activePed = target;
                         currentNpcPersona = "companion";
                         activeMode = "companion";

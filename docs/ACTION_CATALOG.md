@@ -25,7 +25,7 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 | `follow_player` | `grp.setMember(ped)` | Returns to CJ and follows on foot or in vehicle. | "Follow me", "Come here", "Let's roll" |
 | `look_at_player` | `ped.lookAtChar(playerChar, 3000)` | Turns head towards CJ to make eye contact. | "Look at me", "Listen up" |
 | `face_player` | `ped.turnToFaceChar(playerChar)` | Rotates full body towards CJ. | "Face me", "Look this way" |
-| `heal` | `ped.setHealth(100)` | Uses first aid to restore companion health. | "Take this medkit", "Heal yourself" |
+| `heal` | `playerChar & ped` | Restores health & armor (100) for both CJ and the companion. | "Take this medkit", "Heal yourself", "Hesoyam" |
 | `attack_threat` | `Task.KillCharOnFoot(ped, threat)` | Engages nearby hostile attacking CJ. | "Take him down!", "Get him!" |
 | `none` | N/A | Conversational response only, no physical action. | "What's up?", "How are you doing?" |
 
@@ -35,6 +35,7 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 | Action Command | Weapon Given | Model ID | Ammo | Description | Example Voice Prompt |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `arm_rifle` | M4 (ID 31) | 356 | 600 | Equips military assault rifle with 85% accuracy. | "Equip your M4", "Get the heavy rifle!" |
+| `arm_ak47` | AK-47 (ID 30) | 355 | 600 | Equips Kalashnikov AK-47 assault rifle. | "Equip your AK-47", "Pull out the Kalashnikov" |
 | `arm_rpg` | Rocket Launcher (ID 35) | 359 | 50 | Equips heavy anti-armor / anti-aircraft RPG launcher. | "Bring out the rockets!", "Blow them to hell!" |
 | `arm_combat_shotgun` | Combat Shotgun (ID 27) | 351 | 150 | Equips tactical semi-auto SPAS-12 combat shotgun. | "Grab the combat shotgun", "Tactical breach!" |
 | `arm_pistol` | Desert Eagle (ID 24) | 348 | 250 | Equips high caliber heavy handgun. | "Pull out your Deagle", "Grab the pistol" |
@@ -63,7 +64,7 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 | `dance` | `DAN_Loop_A / dnce_M_a` | Busts moves with San Andreas club dance animations. | "Dance with me!", "Show me your moves" |
 | `strip` | `strip_A / STRIP` | Adult / club exotic dance routine. | "Dance for me", "Give me a private dance" |
 | `lapdance` | `LAPDAN_D / LAPDAN1` | Club lap dance animation routine. | "Give me a lap dance", "Show me some love" |
-| `kiss` / `flirt` | `Grlfrd_Kiss_01 / KISSING` | Romantic kiss and affectionate greeting. | "Give me a kiss", "Come here sweetheart" |
+| `kiss` / `flirt` / `cuddle` | `Grlfrd_Kiss_01 / KISSING` | Romantic kiss, cuddle, and affectionate greeting. | "Give me a kiss", "Cuddle with me", "Come here sweetheart" |
 | `act_drunk` | `WALK_drunk / PED` | Stumbles around with slurred gait. | "Have a drink", "Act drunk" |
 | `sober_up` | Standard Walk | Returns to normal walking animation group. | "Sober up", "Walk straight" |
 | `smoke` | `M_smk_loop / F_smklean_loop` | Lights up a cigarette and puffs. | "Take a smoke", "Light one up" |

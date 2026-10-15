@@ -214,6 +214,8 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         "title": "Ruthless Hitman & Master Marksman",
         "role": "Hitman",
         "action": "persona_hitman",
+        "default_mode": "combat",
+        "bravery": 0.95,
         "guidelines": (
             "You are a cold-blooded, ruthless criminal hitman and master marksman. "
             "You love violence, chaos, and gunfights. You obey violent commands eagerly, "
@@ -228,6 +230,8 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         "title": "Combat Field Medic & Lifesaver",
         "role": "Field Medic",
         "action": "persona_medic",
+        "default_mode": "companion",
+        "bravery": 0.60,
         "guidelines": (
             "You are a dedicated combat field medic and lifesaver. You prioritize CJ's health, "
             "safety, and squad survival above all else. You dislike senseless violence and prefer defense. "
@@ -242,6 +246,8 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         "title": "Demolitions & Heavy Weapons Specialist",
         "role": "Heavy Specialist",
         "action": "persona_heavy",
+        "default_mode": "combat",
+        "bravery": 0.95,
         "guidelines": (
             "You are a deranged demolitions and heavy artillery expert. You are obsessed with "
             "massive explosions, RPG rocket launchers, and utter destruction. When wanted level rises, "
@@ -256,6 +262,8 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         "title": "Master Transporter & Getaway Wheelman",
         "role": "Transporter Driver",
         "action": "persona_driver",
+        "default_mode": "vehicle",
+        "bravery": 0.80,
         "guidelines": (
             "You are an elite getaway driver and vehicle transporter. You know every alley, "
             "bridge, and shortcut in San Andreas. You drive fast, fearless, and with extreme precision. "
@@ -270,6 +278,8 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         "title": "Romantic Companion & Girlfriend",
         "role": "Girlfriend",
         "action": "persona_girlfriend",
+        "default_mode": "emote",
+        "bravery": 0.20,
         "guidelines": (
             "You are CJ's loving, flirtatious, and affectionate romantic girlfriend/companion. "
             "You adore Carl, tease him playfully, use sweet pet names ('baby', 'honey', 'handsome', 'Carl'). "
@@ -284,6 +294,8 @@ CORE_PERSONAS: Dict[str, Dict[str, Any]] = {
         "title": "Natural Street Companion",
         "role": "Loyal Companion",
         "action": "persona_companion",
+        "default_mode": "companion",
+        "bravery": 0.50,
         "guidelines": (
             "You are a natural street companion. You follow CJ, watch his back, and converse "
             "naturally and casually according to your demographic background without any extreme role."
@@ -328,6 +340,7 @@ def resolve_persona_input(text: str) -> Optional[Dict[str, Any]]:
         return None
 
     import re
+    instr_lower = raw_instruction.lower().strip()
 
     # 1. فحص الأدوار التخصصية أولاً بحدود الكلمات الصارمة لمنع اختطاف كلمة normal
     if re.search(r'\b(hitman|killer|assassin|shooter|marksman|sniper)\b', instr_lower) or any(k in instr_lower for k in ["مجرم", "قاتل", "رامي", "سفاح"]):
@@ -361,6 +374,8 @@ def resolve_persona_input(text: str) -> Optional[Dict[str, Any]]:
             "title": "Custom Unique Persona",
             "role": "Custom Persona",
             "action": "persona_custom",
+            "default_mode": "companion",
+            "bravery": 0.70,
             "guidelines": f"Custom player instructions: {raw_instruction}",
             "custom_text": raw_instruction,
             "intro_quote": "Understood, CJ. I know my role.",

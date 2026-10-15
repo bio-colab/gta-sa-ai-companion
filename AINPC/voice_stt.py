@@ -26,6 +26,11 @@ class VoiceSTT:
         self.lock = threading.Lock()
         self.last_latency = 0.0
 
+        # جلسة HTTP متصلة مستدامة لتفادي فتح وإغلاق TLS في كل مقطع صوتي
+        self.session = requests.Session()
+        adapter = requests.adapters.HTTPAdapter(pool_connections=2, pool_maxsize=4, max_retries=1)
+        self.session.mount("https://", adapter)
+
     def _audio_callback(self, indata, frames, time_info, status):
         if self.is_recording:
             self.recorded_chunks.append(indata.copy())
@@ -98,7 +103,7 @@ class VoiceSTT:
             data = {"model": self.model}
             headers = {"Authorization": f"Bearer {self.api_key}"}
 
-            resp = requests.post(self.endpoint, headers=headers, files=files, data=data, timeout=8.0)
+            resp = self.session.post(self.endpoint, headers=headers, files=files, data=data, timeout=8.0)
             self.last_latency = (time.time() - start_t) * 1000
 
             if resp.status_code == 200:
