@@ -252,7 +252,7 @@ gta-sa-ai-companion/
 │   ├── voice_stt.py          # Push-to-talk Groq Whisper STT
 │   └── run_bridge.bat        # 1-click launch script
 ├── cleo/
-│   ├── stage1_test[fs].js    # CLEO Redux JS runtime (local reflexes, text HUD, group AI)
+│   ├── stage1_test[fs][mem].js # CLEO Redux JS runtime (tactical AI, passenger ride, HESOYAM immunity)
 │   └── ainpc_bridge.ini      # IPC communication exchange template
 ├── docs/
 │   ├── ARCHITECTURE.md       # Detailed technical architecture & opcode matrix
@@ -305,7 +305,10 @@ In the spirit of **complete engineering transparency and scientific rigor**, her
      $$\text{pVehicle} = *(\text{uint32\_t}*)0xB74494 + ((\text{vehHandle} \gg 8) \times 0xA18)$$
 
 ### 4. Practical Implementation in Code
-* **Crash-Proof Memory Peeker**: Implemented `getPedPointer()` and `getVehiclePointer()` in `cleo/stage1_test[fs].js` with strict generation bit checking (`flag & 0x80 == 0` and `(flag & 0x7F) == (handle & 0x7F)`) preventing invalid memory reads or CTDs.
+* **Crash-Proof Memory Peeker & Writer**: Implemented `getPedPointer()`, `getVehiclePointer()`, and `restoreCharHealthAndArmour()` in `cleo/stage1_test[fs][mem].js` with `[mem]` permissions and strict generation bit checking (`flag & 0x80 == 0` and `(flag & 0x7F) == (handle & 0x7F)`) preventing invalid memory reads or CTDs.
+* **Smart Chauffeur & Anti-Hijack Ride**: Intercepts vehicle entry when companion is driver, redirecting CJ safely into the passenger seat (`05CA`) without kicking out the driver, with zero key conflicts.
+* **Cheat Code Protection (Hold H for 1.2s)**: Replaced instantaneous trigger with a continuous 1.2-second hold timer and visual progress bar, completely eliminating accidental companion dismissal while typing `HESOYAM`.
+* **100% Health & Armor Restoration + Gear Transfer**: Fixed engine opcode naming (`setArmour`) and added direct memory writes, alongside companion weapon/ammo gifting routines (`give_cj_weapon`, `give_cj_ammo`).
 * **Telemetry Payload Expansion**: Scaled telemetry from 29 to 35 atomic fields without performance overhead or disk I/O penalties.
 * **Tactical Brain Integration**: Connected real-time sensory feeds (`npc_threat_events`, `npc_has_target`, `npc_veh_health`, `npc_is_talking`) to `AINPC/bridge.py` and `AINPC/llm_brain.py`, allowing the LLM to contextually comprehend panic sounds, gunfights, damaged cars, and speaking state.
 

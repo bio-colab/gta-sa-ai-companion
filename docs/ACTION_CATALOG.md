@@ -25,7 +25,9 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 | `follow_player` | `grp.setMember(ped)` | Returns to CJ and follows on foot or in vehicle. | "Follow me", "Come here", "Let's roll" |
 | `look_at_player` | `ped.lookAtChar(playerChar, 3000)` | Turns head towards CJ to make eye contact. | "Look at me", "Listen up" |
 | `face_player` | `ped.turnToFaceChar(playerChar)` | Rotates full body towards CJ. | "Face me", "Look this way" |
-| `heal` | `playerChar & ped` | Restores health & armor (100) for both CJ and the companion. | "Take this medkit", "Heal yourself", "Hesoyam" |
+| `heal` | Direct Memory + Engine | Restores 100% health & 100% armor for both CJ and companion. | "Heal me", "First aid", "Hesoyam" |
+| `give_cj_weapon` | `givePlayerWeapon` | Companion hands CJ an assault rifle / weapon with ammo. | "Give me a gun", "Give me a weapon", "Arm me" |
+| `give_cj_ammo` | `playerChar.giveWeapon` | Companion supplies CJ with 300 rounds of ammo for current gun. | "Give me ammo", "Need more rounds", "Share ammo" |
 | `attack_threat` | `Task.KillCharOnFoot(ped, threat)` | Engages nearby hostile attacking CJ. | "Take him down!", "Get him!" |
 | `none` | N/A | Conversational response only, no physical action. | "What's up?", "How are you doing?" |
 

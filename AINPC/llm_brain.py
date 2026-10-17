@@ -81,10 +81,10 @@ VALID_MODES = ["companion", "combat", "vehicle", "emote"]
 
 MODE_ACTIONS = {
     "companion": [
-        "follow_player", "look_at_player", "face_player", "heal", "attack_threat", "none"
+        "follow_player", "look_at_player", "face_player", "heal", "give_cj_weapon", "give_cj_ammo", "attack_threat", "none"
     ],
     "combat": [
-        "arm_rifle", "arm_ak47", "arm_pistol", "arm_smg", "arm_uzi", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "hands_up", "follow_player", "none"
+        "arm_rifle", "arm_ak47", "arm_pistol", "arm_smg", "arm_uzi", "arm_shotgun", "arm_rpg", "arm_combat_shotgun", "disarm", "driveby", "attack_threat", "heal", "give_cj_weapon", "give_cj_ammo", "arm_cj_rifle", "arm_cj_pistol", "arm_cj_smg", "arm_cj_shotgun", "arm_cj_rpg", "hands_up", "follow_player", "none"
     ],
     "vehicle": [
         "fetch_car", "drive_wander", "drive_to_target", "driveby", "exit_car", "follow_player", "none"
@@ -375,13 +375,15 @@ class LLMBrain:
             f"CRITICAL MODE ENFORCEMENT & INTENT TRANSITION RULES:\n"
             f"- CURRENT ACTIVE MODE: [{self.current_mode.upper()}].\n"
             f"- Allowed actions per mode:\n"
-            f"  * COMPANION: follow_player, look_at_player, face_player, heal, attack_threat, none\n"
-            f"  * COMBAT: arm_rifle, arm_pistol, arm_smg, arm_uzi, arm_shotgun, arm_rpg, arm_combat_shotgun, disarm, driveby, attack_threat, heal, hands_up, follow_player, none\n"
+            f"  * COMPANION: follow_player, look_at_player, face_player, heal, give_cj_weapon, give_cj_ammo, attack_threat, none\n"
+            f"  * COMBAT: arm_rifle, arm_pistol, arm_smg, arm_uzi, arm_shotgun, arm_rpg, arm_combat_shotgun, disarm, driveby, attack_threat, heal, give_cj_weapon, give_cj_ammo, arm_cj_rifle, arm_cj_pistol, arm_cj_smg, arm_cj_shotgun, arm_cj_rpg, hands_up, follow_player, none\n"
             f"  * VEHICLE: fetch_car, drive_wander, drive_to_target, driveby, exit_car, follow_player, none\n"
             f"  * EMOTE: dance, flirt, kiss, strip, lapdance, cuddle, act_drunk, sober_up, gang_sign, smoke, cheer, cower, follow_player, none\n"
             f"- SEAMLESS INTENT TRANSITIONS:\n"
-            f"  * If CJ asks for an action belonging to another mode (e.g., asking to dance, strip, fetch a car, or equip firearms), DO NOT REFUSE!\n"
+            f"  * If CJ asks for an action belonging to another mode (e.g., asking to dance, strip, fetch a car, give weapons, or heal), DO NOT REFUSE!\n"
             f"  * Switch seamlessly: set \"new_mode\" to the requested mode, and execute the appropriate \"action\" immediately!\n"
+            f"  * Example: CJ says 'Give me a weapon' / 'اعطني سلاح' -> output {{\"say\": \"Take this M4 rifle, CJ! Watch your six!\", \"action\": \"give_cj_weapon\", \"new_mode\": \"combat\"}}\n"
+            f"  * Example: CJ says 'Heal me' / 'عالجني' -> output {{\"say\": \"First aid applied, CJ! Health and armor fully restored!\", \"action\": \"heal\", \"new_mode\": \"companion\"}}\n"
             f"  * Example: CJ says 'Let's dance' -> output {{\"say\": \"Let's groove, CJ!\", \"action\": \"dance\", \"new_mode\": \"emote\"}}\n"
             f"  * Example: CJ says 'Bring me a car' -> output {{\"say\": \"On it CJ, grabbing wheels!\", \"action\": \"fetch_car\", \"new_mode\": \"vehicle\"}}\n"
             f"  * Example: CJ says 'Blow them up' -> output {{\"say\": \"Firing rocket launcher!\", \"action\": \"arm_rpg\", \"new_mode\": \"combat\"}}\n"

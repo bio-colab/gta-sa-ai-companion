@@ -4,10 +4,12 @@
 
 log("=== AI NPC Script Starting (Phase 2.1/2.2/2.3) ===");
 
-showTextBox("AI NPC READY~n~Press H near a ped!");
+showTextBox("AI NPC READY~n~Hold H (1.2s) near ped!");
 
 let activePed = null;
 let lastPress = 0;
+let hKeyHoldStartTime = 0;
+let hKeyTriggered = false;
 let lastCarCheck = 0;
 let lastIpcCheck = 0;
 let lastTelemetryCheck = 0;
@@ -225,6 +227,50 @@ function giveNpcWeapon(ped, weaponType, modelId, ammo) {
         }
     } catch (e) {
         log(`[AI ERROR] Failed to equip weapon ${weaponType}: ${e}`);
+    }
+    return false;
+}
+
+// دالة استعادة الصحة والدرع الشاملة والمحصنة عبر الذاكرة المباشرة ودوال المحرك
+function restoreCharHealthAndArmour(charObj) {
+    if (!charObj || !Char.DoesExist(charObj)) return;
+    try {
+        charObj.setHealth(100);
+    } catch (_) {}
+    try {
+        if (typeof charObj.setArmour === "function") {
+            charObj.setArmour(100);
+        } else if (typeof charObj.addArmour === "function") {
+            charObj.addArmour(100);
+        }
+    } catch (_) {}
+    // كتابة ذرية مباشرة في الذاكرة الحية لضمان 100%
+    try {
+        let pPed = getPedPointer(charObj);
+        if (pPed === 0) {
+            // فحص مؤشر اللاعب المباشر CWorld::Players[0].m_pPed
+            pPed = Memory.ReadU32(0x00B7CD98, false);
+        }
+        if (pPed !== 0) {
+            Memory.WriteFloat(pPed + 0x540, 100.0, false); // m_fHealth
+            Memory.WriteFloat(pPed + 0x548, 100.0, false); // m_fArmor
+        }
+    } catch (_) {}
+}
+
+// دالة تزويد CJ بالسلاح والعتاد من المرافق
+function givePlayerWeaponFromCompanion(weaponType, modelId, ammo, weaponName) {
+    try {
+        let player = new Player(0);
+        let playerChar = player.getChar();
+        if (giveNpcWeapon(playerChar, weaponType, modelId, ammo)) {
+            playerChar.setCurrentWeapon(weaponType);
+            Text.PrintStringNow("~g~[GEAR TRANSFER] Companion handed CJ " + weaponName + "!~w~", 3500);
+            log("[AI GEAR] Companion transferred " + weaponName + " (Type " + weaponType + ", Ammo " + ammo + ") to CJ.");
+            return true;
+        }
+    } catch (e) {
+        log("[AI ERROR] Failed to transfer " + weaponName + " to player: " + e);
     }
     return false;
 }
@@ -609,14 +655,44 @@ while (true) {
                 } else if (actionCmd === "hands_up") {
                     Task.HandsUp(activePed, 3000);
                 } else if (actionCmd === "heal") {
+                    restoreCharHealthAndArmour(playerChar);
+                    restoreCharHealthAndArmour(activePed);
+                    Text.PrintStringNow("~g~[AI HEALTH] Health & Armor Restored for CJ & Companion!~w~", 3500);
+                    log("[AI HEALTH] Restored 100% Health & Armor to CJ and active NPC.");
+                } else if (actionCmd === "give_cj_weapon" || actionCmd === "arm_cj_rifle" || actionCmd === "give_cj_m4") {
+                    if (givePlayerWeaponFromCompanion(31, 356, 500, "M4 Assault Rifle")) {
+                        try { playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 1500); } catch (_) {}
+                    }
+                } else if (actionCmd === "arm_cj_pistol" || actionCmd === "give_cj_pistol") {
+                    if (givePlayerWeaponFromCompanion(24, 348, 200, "Desert Eagle")) {
+                        try { playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 1500); } catch (_) {}
+                    }
+                } else if (actionCmd === "arm_cj_smg" || actionCmd === "give_cj_smg" || actionCmd === "arm_cj_mp5") {
+                    if (givePlayerWeaponFromCompanion(29, 353, 400, "MP5 SMG")) {
+                        try { playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 1500); } catch (_) {}
+                    }
+                } else if (actionCmd === "arm_cj_shotgun" || actionCmd === "give_cj_shotgun") {
+                    if (givePlayerWeaponFromCompanion(27, 351, 80, "Combat Shotgun")) {
+                        try { playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 1500); } catch (_) {}
+                    }
+                } else if (actionCmd === "arm_cj_rpg" || actionCmd === "give_cj_rpg") {
+                    if (givePlayerWeaponFromCompanion(35, 359, 20, "Rocket Launcher")) {
+                        try { playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 1500); } catch (_) {}
+                    }
+                } else if (actionCmd === "give_cj_ammo" || actionCmd === "share_ammo") {
                     try {
-                        playerChar.setHealth(100);
-                        playerChar.addArmor(100);
-                    } catch (_) {}
-                    activePed.setHealth(100);
-                    activePed.addArmor(100);
-                    Text.PrintStringNow("~g~[AI CHEAT] HESOYAM: Health & Armor Restored!~w~", 3000);
-                    log("[AI CHEAT] Executed HESOYAM on CJ and active NPC (Health=100, Armor=100)");
+                        let curWep = playerChar.getCurrentWeapon();
+                        if (curWep > 0) {
+                            playerChar.giveWeapon(curWep, 300);
+                            Text.PrintStringNow("~g~[GEAR TRANSFER] Companion supplied 300 rounds of ammo!~w~", 3500);
+                            log("[AI GEAR] Supplied 300 ammo for weapon " + curWep + " to player.");
+                            try { playNpcAnimation(activePed, "prtial_gngtlkA", "GANGS", false, 1500); } catch (_) {}
+                        } else {
+                            givePlayerWeaponFromCompanion(31, 356, 300, "M4 Rifle with Ammo");
+                        }
+                    } catch (e) {
+                        log("[AI ERROR] Failed to give ammo: " + e);
+                    }
                 } else if (actionCmd === "arm_pistol") {
                     if (giveNpcWeapon(activePed, 24, 348, 250)) {
                         Text.PrintStringNow("~g~[AI ARMED] Desert Eagle equipped!~w~", 3000);
@@ -1161,12 +1237,10 @@ while (true) {
                 let cjHealThreshold = Math.floor(45 + companionTrust * 35);
                 if (cjHp < cjHealThreshold || npcHp < 50) {
                     lastMedicHealTime = now;
-                    playerChar.setHealth(100);
-                    let armorBonus = Math.floor(25 + companionTrust * 50);
-                    playerChar.addArmor(armorBonus);
-                    activePed.setHealth(100);
+                    restoreCharHealthAndArmour(playerChar);
+                    restoreCharHealthAndArmour(activePed);
                     Text.PrintStringNow(`~g~[MEDIC SUPPORT] First Aid applied! (Trust: ${Math.floor(companionTrust * 100)}%)~w~`, 3500);
-                    log(`[AI MEDIC PASSIVE] Healed wounded player & squad with trust scaling (Armor +${armorBonus}, Trust: ${(companionTrust * 100).toFixed(0)}%).`);
+                    log(`[AI MEDIC PASSIVE] Healed wounded player & squad with 100% health & armor (Trust: ${(companionTrust * 100).toFixed(0)}%).`);
                 }
             } catch (_) {}
         }
@@ -1478,6 +1552,44 @@ while (true) {
                 }
             }
 
+            // نظام الركوب كراكب مع السائق المحترف ومنع طرد المرافق (Smart Chauffeur & Anti-Hijack)
+            if (!carFetchActive && activePed.isInAnyCar() && !playerChar.isInAnyCar()) {
+                let compCar = activePed.getCarIsUsing();
+                if (compCar && Car.DoesExist(compCar) && !Car.IsDead(compCar)) {
+                    let driver = compCar.getDriver();
+                    if (driver && isSameEntity(driver, activePed)) {
+                        let cjPos = playerChar.getCoordinates();
+                        let carPos = compCar.getCoordinates();
+                        let distToCar = Math.hypot(cjPos.x - carPos.x, cjPos.y - carPos.y, cjPos.z - carPos.z);
+
+                        if (distToCar <= 6.0) {
+                            Text.PrintStringNow("~b~[CHAUFFEUR READY] Press [F] or [G] to ride as Passenger!~w~", 200);
+
+                            let isGPressed = !isTypingMode && isKeyJustPressedCustom(71); // Key G = 71
+                            let isTryingToJack = playerChar.isGettingInToACar();
+
+                            if (isGPressed || isTryingToJack) {
+                                let maxSeats = compCar.getMaximumNumberOfPassengers();
+                                let freeSeat = -1;
+                                for (let s = 0; s < maxSeats; s++) {
+                                    if (compCar.isPassengerSeatFree(s)) {
+                                        freeSeat = s;
+                                        break;
+                                    }
+                                }
+
+                                if (freeSeat !== -1) {
+                                    playerChar.clearTasksImmediately();
+                                    Task.EnterCarAsPassenger(playerChar, compCar, -1, freeSeat);
+                                    Text.PrintStringNow("~b~[CHAUFFEUR] Riding with your companion driver!~w~", 3000);
+                                    log(`[AI VEHICLE] Intercepted CJ car-jack! Redirected CJ to passenger seat ${freeSeat}.`);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             // نظام المرافقة الذكية للمركبات
             if (!carFetchActive && now - lastCarCheck > 800) {
                 lastCarCheck = now;
@@ -1720,9 +1832,31 @@ while (true) {
         }
     }
 
-    // فحص ضغط المفتاح H (كود 72) - يتم تجاهله تماماً أثناء فتح شريط كتابة الأوامر
-    if (!isTypingMode && isKeyJustPressedCustom(72)) {
-        if (now - lastPress > 800) { // منع التكرار السريع
+    // ====================================================================
+    // المرحلة 6: التفعيل والتحرير بالمفتاح H بضغطة مطولة (Hold for 1.2s)
+    // لحماية اللاعب من فقدان المرافق عند كتابة كود HESOYAM أو الضغط السريع
+    // ====================================================================
+    let isHPressed = !isTypingMode && Pad.IsKeyPressed(72);
+    if (isHPressed) {
+        if (hKeyHoldStartTime === 0) {
+            hKeyHoldStartTime = now;
+            hKeyTriggered = false;
+        }
+        let holdDuration = now - hKeyHoldStartTime;
+
+        // إظهار تنبيه مرئي حي للاعب أثناء الاستمرار بالضغط
+        if (!hKeyTriggered && holdDuration > 250) {
+            let pct = Math.min(100, Math.floor((holdDuration / 1200) * 100));
+            if (activePed === null) {
+                Text.PrintStringNow(`~g~Holding [H] to Recruit Companion... (${pct}%)~w~`, 200);
+            } else {
+                Text.PrintStringNow(`~r~Holding [H] to Dismiss Companion... (${pct}%)~w~`, 200);
+            }
+        }
+
+        // تفريغ الإجراء فقط بعد اكتمال 1.2 ثانية كاملة
+        if (!hKeyTriggered && holdDuration >= 1200) {
+            hKeyTriggered = true;
             lastPress = now;
 
             if (activePed === null) {
@@ -1855,5 +1989,9 @@ while (true) {
                 }
             }
         }
+    } else {
+        hKeyHoldStartTime = 0;
+        hKeyTriggered = false;
     }
 }
+
