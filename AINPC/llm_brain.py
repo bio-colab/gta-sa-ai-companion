@@ -328,13 +328,22 @@ class LLMBrain:
 
         memories_text = "\n".join([f"  * {m}" for m in all_mems]) if all_mems else "  * None yet (we just met)."
 
+        tactical_info = []
+        if context.get("npc_threat_events", 0) > 0:
+            tactical_info.append(f"Perceived Threats Nearby: {context['npc_threat_events']}")
+        if context.get("npc_has_target"):
+            tactical_info.append("Aiming at Target Hostile")
+        if context.get("npc_veh_health", 0) > 0:
+            tactical_info.append(f"Vehicle Health: {context['npc_veh_health']}/1000")
+        tactical_str = f" | Tactical Awareness: [{', '.join(tactical_info)}]" if tactical_info else ""
+
         world_state = (
             f"Location: {zone} | Time: {time_str} | Weather: {weather_str} | Car Radio: {radio_str} | "
             f"Combat/Threat Status: {threat_str} | Nearest Food: {nearest_food} | Nearest Guns: {nearest_weapons} | "
             f"Nearest Hospital: {nearest_hospital} | Map Target Blip: {target_blip} | "
             f"CJ Health: {cj_health}% | CJ Weapon: {cj_weapon} | "
             f"Wanted Level: {cj_wanted} stars | CJ Mode: {cj_mode} | "
-            f"Your Health: {npc_health}% | Your Weapon: {npc_weapon_name} | Distance to CJ: {npc_dist:.1f}m"
+            f"Your Health: {npc_health}% | Your Weapon: {npc_weapon_name} | Distance to CJ: {npc_dist:.1f}m{tactical_str}"
         )
 
         persona_block = ""

@@ -63,6 +63,47 @@ function isSameEntity(a, b) {
     return ha !== 0 && ha === hb;
 }
 
+// ====================================================================
+// REA Level 2/3 Hardware Pointers - قراءة الذاكرة المباشرة فائقة الأمان
+// ====================================================================
+function getPedPointer(entity) {
+    let handle = getHandle(entity);
+    if (!handle || typeof handle !== "number") return 0;
+    try {
+        let poolPtr = Memory.ReadU32(0xB74490, false);
+        if (!poolPtr) return 0;
+        let objectsArray = Memory.ReadU32(poolPtr, false);
+        let byteMap = Memory.ReadU32(poolPtr + 4, false);
+        let slot = handle >> 8;
+        if (slot < 0 || slot >= 140) return 0;
+        let flag = Memory.ReadU8(byteMap + slot, false);
+        if (flag & 0x80) return 0; // خانة فارغة أو محذوفة في حوض المشاة
+        if ((flag & 0x7F) !== (handle & 0x7F)) return 0; // مقبض منتهي الصلاحية
+        return objectsArray + (slot * 0x7C4);
+    } catch (_) {
+        return 0;
+    }
+}
+
+function getVehiclePointer(entity) {
+    let handle = getHandle(entity);
+    if (!handle || typeof handle !== "number") return 0;
+    try {
+        let poolPtr = Memory.ReadU32(0xB74494, false);
+        if (!poolPtr) return 0;
+        let objectsArray = Memory.ReadU32(poolPtr, false);
+        let byteMap = Memory.ReadU32(poolPtr + 4, false);
+        let slot = handle >> 8;
+        if (slot < 0 || slot >= 110) return 0;
+        let flag = Memory.ReadU8(byteMap + slot, false);
+        if (flag & 0x80) return 0;
+        if ((flag & 0x7F) !== (handle & 0x7F)) return 0;
+        return objectsArray + (slot * 0xA18);
+    } catch (_) {
+        return 0;
+    }
+}
+
 function setPlayerControlSafe(playerObj, enabled) {
     try {
         if (playerObj && typeof playerObj.setControl === "function") {
@@ -1245,6 +1286,12 @@ while (true) {
             let pedInCar = 0;
             let distStr = "0.0";
             let pedWeapon = 0;
+            let pedState = 1;
+            let threatCount = 0;
+            let npcHasTarget = 0;
+            let npcIsTalking = 0;
+            let npcVehHp = 0;
+            let npcVehLock = 1;
 
             if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
                 npcActive = 1;
@@ -1260,6 +1307,38 @@ while (true) {
                 try {
                     pedWeapon = activePed.getCurrentWeapon();
                 } catch (_) {}
+
+                // =========================================================
+                // قراءة الوعي التكتيكي المباشر من الذاكرة الحية عبر مؤشرات REA
+                // =========================================================
+                try {
+                    let pPed = getPedPointer(activePed);
+                    if (pPed !== 0) {
+                        // 1. حالة الشخصية الأساسية (PedState: 1=IDLE, 3=ATTACK, 4=FIGHT, 9=FLEE, 14=DRIVE)
+                        pedState = Memory.ReadU32(pPed + 0x530, false);
+
+                        // 2. الهدف المعادي المباشر الذي تصوب عليه الشخصية
+                        let pTarget = Memory.ReadU32(pPed + 0x784, false);
+                        npcHasTarget = (pTarget !== 0) ? 1 : 0;
+
+                        // 3. طابور مدركات الأحداث المحيطة (CEventGroup - طلقات نار، انفجارات)
+                        let pIntel = Memory.ReadU32(pPed + 0x47C, false);
+                        if (pIntel !== 0) {
+                            threatCount = Memory.ReadU32(pIntel + 0x70, false);
+                        }
+
+                        // 4. حالة الكلام الصوتي المباشر داخل اللعبة (CPedAudio)
+                        let speechId = Memory.ReadU32(pPed + 0x1D8, false);
+                        npcIsTalking = (speechId !== 0) ? 1 : 0;
+
+                        // 5. حالة ورابط المركبة وصحتها
+                        let pVeh = Memory.ReadU32(pPed + 0x58C, false);
+                        if (pVeh !== 0) {
+                            npcVehHp = Math.round(Memory.ReadFloat(pVeh + 0x4C0, false));
+                            npcVehLock = Memory.ReadI32(pVeh + 0x4F8, false);
+                        }
+                    }
+                } catch (_) {}
             }
 
             let cjXStr = (cjPos && typeof cjPos.x === 'number') ? cjPos.x.toFixed(1) : "0.0";
@@ -1267,7 +1346,7 @@ while (true) {
             let cjZStr = (cjPos && typeof cjPos.z === 'number') ? cjPos.z.toFixed(1) : "0.0";
             let speedStr = (typeof carSpeed === 'number' && !isNaN(carSpeed)) ? carSpeed.toFixed(1) : "0.0";
 
-            // تجميع التيليميتري في حزمة ذرية واحدة لخفض عمليات القرص بنسبة 96.5% (1 كتابة بدلاً من 29)
+            // تجميع التيليميتري الموحدة والموسعة في حزمة ذرية واحدة
             let telemetryPacket = [
                 cjHealth,
                 cjArmor,
@@ -1297,7 +1376,13 @@ while (true) {
                 pedModel,
                 pedInCar,
                 distStr,
-                pedWeapon
+                pedWeapon,
+                pedState,
+                threatCount,
+                npcHasTarget,
+                npcIsTalking,
+                npcVehHp,
+                npcVehLock
             ].join("|");
 
             IniFile.WriteString(telemetryPacket, INI_FILE, "GAME", "telemetry");

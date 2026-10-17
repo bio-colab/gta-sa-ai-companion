@@ -173,7 +173,9 @@ class SafeIniManager:
                                 "clock_hour", "clock_min", "weather_id", "on_mission", "threat_active",
                                 "cj_zone", "cj_x", "cj_y", "cj_z", "target_active", "target_x", "target_y",
                                 "npc_active", "npc_health", "npc_armor", "npc_model", "npc_in_car",
-                                "npc_dist", "npc_weapon"
+                                "npc_dist", "npc_weapon",
+                                "npc_ped_state", "npc_threat_events", "npc_has_target", "npc_is_talking",
+                                "npc_veh_health", "npc_veh_lock"
                             ]
                             for k, v in zip(tele_keys, parts):
                                 new_data["GAME"][k] = v
@@ -525,8 +527,31 @@ def format_telemetry(ini_mgr: SafeIniManager) -> str:
         npc_weapon = ini_mgr.get_int("GAME", "npc_weapon", 0)
         npc_in_car = ini_mgr.get_int("GAME", "npc_in_car", 0)
         npc_dist = ini_mgr.get_float("GAME", "npc_dist", 0.0)
+        npc_ped_state = ini_mgr.get_int("GAME", "npc_ped_state", 1)
+        npc_threat_events = ini_mgr.get_int("GAME", "npc_threat_events", 0)
+        npc_has_target = ini_mgr.get_int("GAME", "npc_has_target", 0)
+        npc_is_talking = ini_mgr.get_int("GAME", "npc_is_talking", 0)
+        npc_veh_health = ini_mgr.get_int("GAME", "npc_veh_health", 0)
+
+        PED_STATES = {
+            0: "NONE", 1: "IDLE", 2: "LOOK", 3: "ATTACK", 4: "FIGHT",
+            7: "CHAT", 8: "MISSION", 9: "FLEE", 14: "DRIVING", 50: "DEAD"
+        }
+        state_name = PED_STATES.get(npc_ped_state, f"STATE_{npc_ped_state}")
         npc_mode = "In Vehicle" if npc_in_car else "On Foot"
         npc_weapon_name = WEAPONS.get(npc_weapon, f"Weapon #{npc_weapon}")
+
+        tactical_flags = []
+        if npc_threat_events > 0:
+            tactical_flags.append(f"Perceiving {npc_threat_events} Threat(s)")
+        if npc_has_target:
+            tactical_flags.append("Aiming at Hostile")
+        if npc_is_talking:
+            tactical_flags.append("Speaking In-Game")
+        if npc_in_car and npc_veh_health > 0:
+            tactical_flags.append(f"Veh HP: {npc_veh_health}")
+        
+        tactical_str = f" | Tactical: [{', '.join(tactical_flags)}]" if tactical_flags else ""
 
         demo = brain.demographics_engine.get_demographics(npc_model)
         demo_name = demo["name"]
@@ -534,7 +559,7 @@ def format_telemetry(ini_mgr: SafeIniManager) -> str:
         demo_age = demo["age"].capitalize()
         demo_arch = demo["archetype"]
         cur_mode = bridge_state.get("active_mode", brain.current_mode).upper()
-        lines.append(f"  [NPC] {demo_name} ({demo_gender}, {demo_age} - {demo_arch}) | Layer: [{cur_mode}] | Model: {npc_model} | HP: {npc_health}% | Armor: {npc_armor}% | Gun: {npc_weapon_name} | Dist: {npc_dist:.1f}m | Escort: {npc_mode}")
+        lines.append(f"  [NPC] {demo_name} ({demo_gender}, {demo_age} - {demo_arch}) | Layer: [{cur_mode}] | Model: {npc_model} | HP: {npc_health}% | Armor: {npc_armor}% | Gun: {npc_weapon_name} | State: {state_name} | Dist: {npc_dist:.1f}m | Escort: {npc_mode}{tactical_str}")
     else:
         lines.append("  [NPC] STANDBY (No active ped attached. Press H near a citizen in-game)")
 
@@ -951,7 +976,13 @@ def main():
                         "npc_model": npc_model,
                         "npc_dist": npc_dist,
                         "npc_weapon": npc_weapon,
-                        "npc_weapon_name": npc_weapon_name
+                        "npc_weapon_name": npc_weapon_name,
+                        "npc_ped_state": ini.get_int("GAME", "npc_ped_state", 1),
+                        "npc_threat_events": ini.get_int("GAME", "npc_threat_events", 0),
+                        "npc_has_target": ini.get_int("GAME", "npc_has_target", 0),
+                        "npc_is_talking": ini.get_int("GAME", "npc_is_talking", 0),
+                        "npc_veh_health": ini.get_int("GAME", "npc_veh_health", 0),
+                        "npc_veh_lock": ini.get_int("GAME", "npc_veh_lock", 1)
                     }
 
                     # محرك كشف الأحداث الذكي والمستقل (Decoupled Autonomous Event Engine)
