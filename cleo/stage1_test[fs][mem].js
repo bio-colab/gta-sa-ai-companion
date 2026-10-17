@@ -16,6 +16,7 @@ let lastTelemetryCheck = 0;
 let wasPlayerInCar = false;
 let lastAckPing = 0;
 let bridgeConnected = false;
+let lastPingTime = 0;
 
 let lastSayAck = 0;
 let lastActionAck = 0;
@@ -165,6 +166,7 @@ let lastDriveByTime = 0;
 let activePedBlip = null;
 let currentBlipDisplay = -1;
 let lastBlipUpdate = 0;
+let lastFollowCheck = 0;
 
 const INI_FILE = "cleo/ainpc_bridge.ini";
 
@@ -564,6 +566,9 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
     // 1. الأوضاع والشخصيات التخصصية (Personas)
     if (cmd === "driver" || cmd === "transporter" || cmd === "chauffeur") {
         currentNpcPersona = "driver";
+        giveNpcWeapon(ped, 24, 348, 150); // Desert Eagle
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
         Text.PrintStringNow("~b~[OFFLINE: DRIVER] Getaway Chauffeur Active! Ready to drive.~w~", 3500);
         log("[OFFLINE AI] Activated Driver persona.");
         return true;
@@ -572,6 +577,9 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.addArmor(100);
         giveNpcWeapon(ped, 35, 359, 30);  // RPG
         giveNpcWeapon(ped, 27, 351, 150); // Combat Shotgun
+        ped.setCurrentWeapon(35);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
         Text.PrintStringNow("~r~[OFFLINE: HEAVY] Demolitions & Anti-Air Online! Armed with RPG.~w~", 3500);
         log("[OFFLINE AI] Activated Heavy persona.");
         return true;
@@ -582,12 +590,20 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setWeaponSkill(2);
         giveNpcWeapon(ped, 31, 356, 800); // M4
         giveNpcWeapon(ped, 24, 348, 300); // Desert Eagle
+        ped.setCurrentWeapon(31);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
         Text.PrintStringNow("~r~[OFFLINE: HITMAN] Lethal Hitman Active! 100% Accuracy & M4 equipped.~w~", 3500);
         log("[OFFLINE AI] Activated Hitman persona.");
         return true;
     } else if (cmd === "medic" || cmd === "doctor") {
         currentNpcPersona = "medic";
         giveNpcWeapon(ped, 24, 348, 200);
+        ped.setCurrentWeapon(24);
+        restoreCharHealthAndArmour(playerChar);
+        restoreCharHealthAndArmour(ped);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
         Text.PrintStringNow("~g~[OFFLINE: MEDIC] Field Medic Ready! Auto-triage enabled.~w~", 3500);
         log("[OFFLINE AI] Activated Medic persona.");
         return true;
@@ -599,7 +615,12 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.clearTasksImmediately();
         let grp = player.getGroup();
         grp.setLeader(playerChar);
+        grp.setFollowStatus(true);
+        grp.setSeparationRange(150.0);
         grp.setMember(ped);
+        giveNpcWeapon(ped, 24, 348, 150);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
         Text.PrintStringNow("~g~[OFFLINE: RESET] Default Companion Active.~w~", 3000);
         log("[OFFLINE AI] Reset to default companion.");
         return true;
@@ -691,8 +712,8 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.clearTasksImmediately();
         let grp = player.getGroup();
         grp.setLeader(playerChar);
-        grp.setDefaultTaskAllocator(0);
         grp.setFollowStatus(true);
+        grp.setSeparationRange(150.0);
         grp.setMember(ped);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
@@ -705,23 +726,50 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
     else if (cmd === "heal" || cmd === "hesoyam" || cmd === "medkit" || cmd === "cure") {
         restoreCharHealthAndArmour(playerChar);
         restoreCharHealthAndArmour(ped);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
         Text.PrintStringNow("~g~[OFFLINE HEALTH] 100% Health & Armor Restored!~w~", 3500);
         log("[OFFLINE AI] Full Health & Armor restored to player and companion.");
         return true;
     } else if (cmd === "gun" || cmd === "m4" || cmd === "rifle" || cmd === "weapon") {
         givePlayerWeaponFromCompanion(31, 356, 500, "M4 Assault Rifle");
+        giveNpcWeapon(ped, 31, 356, 500);
+        ped.setCurrentWeapon(31);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with M4!~w~", 3500);
         return true;
     } else if (cmd === "pistol" || cmd === "deagle") {
         givePlayerWeaponFromCompanion(24, 348, 200, "Desert Eagle");
+        giveNpcWeapon(ped, 24, 348, 200);
+        ped.setCurrentWeapon(24);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with Desert Eagle!~w~", 3500);
         return true;
     } else if (cmd === "smg" || cmd === "mp5") {
         givePlayerWeaponFromCompanion(29, 353, 400, "MP5 SMG");
+        giveNpcWeapon(ped, 29, 353, 400);
+        ped.setCurrentWeapon(29);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with MP5!~w~", 3500);
         return true;
     } else if (cmd === "shotgun" || cmd === "spas") {
         givePlayerWeaponFromCompanion(27, 351, 80, "Combat Shotgun");
+        giveNpcWeapon(ped, 27, 351, 80);
+        ped.setCurrentWeapon(27);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with SPAS-12!~w~", 3500);
         return true;
     } else if (cmd === "rpg" || cmd === "rocket") {
         givePlayerWeaponFromCompanion(35, 359, 20, "Rocket Launcher");
+        giveNpcWeapon(ped, 35, 359, 20);
+        ped.setCurrentWeapon(35);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with Rocket Launcher!~w~", 3500);
         return true;
     } else if (cmd === "ammo") {
         let curWep = playerChar.getCurrentWeapon();
@@ -785,6 +833,7 @@ while (true) {
             if (ping !== undefined && ping > 0) {
                 if (ping !== lastAckPing) {
                     lastAckPing = ping;
+                    lastPingTime = now;
                     IniFile.WriteInt(ping, INI_FILE, "GAME", "pong");
                     IniFile.WriteString("connected", INI_FILE, "GAME", "status");
 
@@ -794,6 +843,12 @@ while (true) {
                         log(`[AI IPC] Handshake verified with Python Bridge! (Ping=${ping})`);
                     }
                 }
+            }
+
+            // مراقبة نبضات الجسر: إذا توقفت بايثون لأكثر من 4 ثوانٍ يتحول الموديل تلقائياً لأوفلاين نظيف 100%
+            if (bridgeConnected && (now - lastPingTime > 4000)) {
+                bridgeConnected = false;
+                log("[AI IPC] Python Bridge heartbeat lost. Operating in 100% Native Offline AI Mode.");
             }
 
             let trustStr = IniFile.ReadString(INI_FILE, "BRIDGE", "trust_level");
@@ -812,9 +867,11 @@ while (true) {
                 }
             }
 
-            let bridgePersona = IniFile.ReadString(INI_FILE, "BRIDGE", "active_persona");
-            if (bridgePersona && bridgePersona.length > 0 && bridgePersona !== currentNpcPersona) {
-                currentNpcPersona = bridgePersona.toLowerCase().trim();
+            if (bridgeConnected) {
+                let bridgePersona = IniFile.ReadString(INI_FILE, "BRIDGE", "active_persona");
+                if (bridgePersona && bridgePersona.length > 0 && bridgePersona !== currentNpcPersona) {
+                    currentNpcPersona = bridgePersona.toLowerCase().trim();
+                }
             }
         } catch (e) {
             // صامت لحماية اللعبة
@@ -822,10 +879,11 @@ while (true) {
     }
 
     // =========================================================
-    // المرحلة 2.3: استقبال الحوارات والترجمة والأوامر (Subtitles & Actions)
+    // المرحلة 2.3: استقبال الحوارات والترجمة والأوامر (Subtitles & Actions - Only when Bridge Linked)
     // =========================================================
-    try {
-        let sayId = IniFile.ReadInt(INI_FILE, "BRIDGE", "say_id");
+    if (bridgeConnected) {
+        try {
+            let sayId = IniFile.ReadInt(INI_FILE, "BRIDGE", "say_id");
         if (sayId !== undefined && sayId !== lastSayAck && sayId > 0) {
             lastSayAck = sayId;
             let sayText = IniFile.ReadString(INI_FILE, "BRIDGE", "say_text");
@@ -870,9 +928,8 @@ while (true) {
 
                         let grp = player.getGroup();
                         grp.setLeader(playerChar);
-                        grp.setDefaultTaskAllocator(0);
                         grp.setFollowStatus(true);
-                        grp.setSeparationRange(60.0);
+                        grp.setSeparationRange(150.0);
                         grp.setMember(activePed);
 
                         let cjPos = playerChar.getCoordinates();
@@ -1299,6 +1356,7 @@ while (true) {
         }
     } catch (e) {
         // حماية اللعبة
+    }
     }
 
     // =========================================================
@@ -1813,8 +1871,8 @@ while (true) {
                     activePed.clearTasksImmediately();
                     let grp = player.getGroup();
                     grp.setLeader(playerChar);
-                    grp.setDefaultTaskAllocator(0);
                     grp.setFollowStatus(true);
+                    grp.setSeparationRange(150.0);
                     grp.setMember(activePed);
                     Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 7, 0);
                     Text.PrintStringNow("~g~[DIVERSION COMPLETE] CJ escaped safely! Squad regrouping!~w~", 4000);
@@ -1911,6 +1969,35 @@ while (true) {
             }
 
             // =========================================================
+            // محرك المرافقة التكتيكية النشطة على الأقدام (Active Foot Escort & Follow Engine)
+            // =========================================================
+            if (!carFetchActive && !diversionActive && currentThreatChar === null && !playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
+                if (now - lastFollowCheck > 600) {
+                    lastFollowCheck = now;
+                    try {
+                        let cjPos = playerChar.getCoordinates();
+                        let pedPos = activePed.getCoordinates();
+                        let distToCj = Math.hypot(cjPos.x - pedPos.x, cjPos.y - pedPos.y, cjPos.z - pedPos.z);
+
+                        if (distToCj > 35.0) {
+                            Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+                        } else if (distToCj > 8.0) {
+                            Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 6, 0);
+                        } else if (distToCj > 3.2) {
+                            Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 4, 0);
+                        } else {
+                            try {
+                                if (activePed.isWalking() || activePed.isRunning()) {
+                                    activePed.clearTasks();
+                                    Task.TurnCharToFaceChar(activePed, playerChar);
+                                }
+                            } catch (_) {}
+                        }
+                    } catch (_) {}
+                }
+            }
+
+            // =========================================================
             // المرحلة 5.2: الذكاء التكتيكي المحلي التلقائي للشخصيات (Autonomous Persona Tactics Engine - 0 API Calls)
             // =========================================================
             if (!carFetchActive && !diversionActive && now - lastThreatCheck > 500) {
@@ -1936,7 +2023,6 @@ while (true) {
                                 if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
                                     let grp = player.getGroup();
                                     grp.setLeader(playerChar);
-                                    grp.setDefaultTaskAllocator(0);
                                     grp.setFollowStatus(true);
                                     grp.setMember(activePed);
                                 }
@@ -2077,7 +2163,6 @@ while (true) {
                                 if (!playerChar.isInAnyCar() && !activePed.isInAnyCar()) {
                                     let grp = player.getGroup();
                                     grp.setLeader(playerChar);
-                                    grp.setDefaultTaskAllocator(0);
                                     grp.setFollowStatus(true);
                                     grp.setMember(activePed);
                                 }
@@ -2092,7 +2177,6 @@ while (true) {
                                 activePed.clearTasksImmediately();
                                 let grp = player.getGroup();
                                 grp.setLeader(playerChar);
-                                grp.setDefaultTaskAllocator(0);
                                 grp.setFollowStatus(true);
                                 grp.setMember(activePed);
                                 log("[AI COMBAT WATCHDOG] Aborted ground/ghost shooting. Reset companion to group follow.");
@@ -2160,15 +2244,19 @@ while (true) {
                         // 2. إعداد مجموعة اللاعب وتعيين CJ كقائد رسمي
                         let grp = player.getGroup();
                         grp.setLeader(playerChar);
-                        grp.setDefaultTaskAllocator(0); // 0 = FollowAnyMeans (تبعية ومرافقة كاملة)
-                        grp.setFollowStatus(true);      // ركوب ومغادرة المركبات مع القائد تلقائياً
-                        grp.setSeparationRange(60.0);   // المدى المسموح به
+                        grp.setFollowStatus(true);       // ركوب ومغادرة المركبات مع القائد تلقائياً
+                        grp.setSeparationRange(150.0);    // مدى واسع وتغطية كاملة
 
                         // 3. ضم الشخصية وتأمين ولائها
                         grp.setMember(activePed);
                         player.setGroupToFollowAlways(true); // منع أمر H من إيقاف الشخصية
                         activePed.setNeverLeavesGroup(true);
                         activePed.setNeverTargeted(true);
+
+                        // 4. تسليح المرافق فوراً بمسدس تكتيكي للدفاع عن النفس واستدعاؤه نحو CJ
+                        giveNpcWeapon(activePed, 24, 348, 150);
+                        let cjPos = playerChar.getCoordinates();
+                        Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 7, 0);
 
                         // 4. إنشاء علامة الرادار الخضراء كأعضاء العصابة الرسميين
                         try {
