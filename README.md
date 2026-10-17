@@ -177,15 +177,40 @@ GROQ_STT_MODEL=whisper-large-v3-turbo
 
 ### 4. Deploy Mod Files to GTA San Andreas
 Copy the following files into your GTA San Andreas installation folder:
-* `cleo/stage1_test[fs].js` ➔ `[GTA SA Folder]/cleo/stage1_test[fs].js`
-* `cleo/ainpc_bridge.ini`   ➔ `[GTA SA Folder]/cleo/ainpc_bridge.ini`
-* `AINPC/` folder           ➔ `[GTA SA Folder]/AINPC/`
+* `cleo/stage1_test[fs][mem].js` ➔ `[GTA SA Folder]/cleo/stage1_test[fs][mem].js`
+* `cleo/ainpc_bridge.ini`        ➔ `[GTA SA Folder]/cleo/ainpc_bridge.ini`
+* `AINPC/` folder                ➔ `[GTA SA Folder]/AINPC/`
 
 ---
 
-## 🎮 How to Play & Controls
+## ⚡ 100% Offline Mode (Zero Internet, Zero Python, Zero API Keys)
 
-### 1. Launch the Backend
+> 💡 **Want to play right now without internet or don't have an API key?**  
+> The system utilizes a **Dual-Tier Architecture**:
+> 1. **Tier 1 (100% Native Offline Engine)**: Runs out-of-the-box inside `gta_sa.exe` via CLEO Redux opcodes. Zero internet, 0ms latency, zero token cost.
+> 2. **Tier 2 (Augmented Cloud AI)**: Optional enhancement powered by Python, Groq Whisper voice, LLM roleplay, and SQLite episodic memory.
+
+### How to Play 100% Offline:
+1. Launch `gta_sa.exe` directly (no Python script or internet connection needed).
+2. Walk up to any citizen and **hold Key `H` for 1.2 seconds** to recruit them.
+3. Press **`F6`** or **`~`** (tilde) to open the HUD command bar, type any command, and press **`Enter`**:
+   * `/driver`: Activates Getaway Chauffeur persona (evasive driving, auto vehicle repair).
+   * `/heavy`: Equips RPG + SPAS-12, refreshes armor to 100%, shoots down police helicopters at 3+ stars.
+   * `/hitman`: Equips M4 + Deagle with 100% accuracy and lethal headshot rate.
+   * `/medic`: Combat medic that restores 100% health & armor to CJ and companion.
+   * `/distract` or `/chaos`: Companion detaches, creates chaos to cover CJ's escape, and auto-regroups after 140m!
+   * `/bring`: Companion sprints, jacks nearest vehicle, and delivers it directly to CJ.
+   * `/drive`: Drives CJ smoothly to map waypoint (or cruises if no marker).
+   * `/heal`: Instantly restores 100% Health & 100% Armor to CJ and companion via memory.
+   * `/gun`: Companion hands CJ an M4 Assault Rifle with 500 rounds.
+   * `/ammo`: Hands CJ 300 rounds of ammo for active weapon.
+   * 📖 **For the complete literal command reference and options, see [Offline Commands Player Manual (docs/OFFLINE_COMMANDS.md)](docs/OFFLINE_COMMANDS.md)**.
+
+---
+
+## 🎮 How to Play & Controls (Full Augmented Mode)
+
+### 1. Launch the Backend (Optional for Tier 2)
 Double click `AINPC/run_bridge.bat` or run:
 ```bash
 python AINPC/bridge.py
@@ -197,7 +222,8 @@ You will see: `[BRIDGE READY] Waiting for GTA San Andreas...`
 * On game load, you will see the subtitle: `AI NPC READY - Press H near a ped!`.
 
 ### 3. Controls
-* **`H` Key**: Press once near any pedestrian to recruit them as your AI Companion. Press `H` again to safely dismiss them.
+* **`H` Key (Hold 1.2s)**: Hold `H` for 1.2 seconds near any pedestrian to recruit them (with a live on-screen percentage progress indicator). Hold `H` again to safely dismiss them. (Short presses are protected to prevent accidental dismissal when entering cheat codes like `HESOYAM`).
+* **`F` / `G` Keys (Smart Chauffeur Passenger)**: When companion is driving, pressing `F` or `G` within 6m redirects CJ to enter as a passenger instead of jacking the car or throwing the companion out!
 * **`T` Key (Push-To-Talk Voice)**: Hold `T` and speak into your microphone. Release `T` when done speaking.
 * **`~` / `\`` Key or `F6` (HUD Command Bar)**: Press to open the live typing bar. Type any message or command, then press **Enter** to submit or **ESC** to cancel. Player controls are automatically frozen during typing to prevent accidental movement or weapon firing.
 
@@ -210,9 +236,9 @@ You can set your companion's persona at any time via the command bar (`F6` / `~`
 | Persona | Command | In-Game Special Ability & Stats |
 | :--- | :--- | :--- |
 | **Hitman** | `/persona hitman` or `/hitman` | 100% weapon accuracy, lethal threat engagement, bloodthirsty demeanor. |
-| **Medic** | `/persona medic` or `/medic` | Autonomous field triage: restores CJ to 100 HP + 50 armor when CJ drops below 70 HP. |
-| **Heavy** | `/persona heavy` or `/heavy` | Demolitions expert armed with RPG-7; intercepts police cruisers, SWAT vans, and police helicopters. |
-| **Driver** | `/persona driver` or `/driver` | Master getaway driver (speed 44.0); automatically takes driver seat and repairs damaged vehicles. |
+| **Medic** | `/persona medic` or `/medic` | Autonomous field triage: restores CJ to 100 HP + 100 armor when health drops. |
+| **Heavy** | `/persona heavy` or `/heavy` | Demolitions expert armed with RPG-7 and SPAS-12; destroys police cruisers and helicopters at 3+ stars. |
+| **Driver** | `/persona driver` or `/driver` | Master getaway driver; automatically takes driver seat and repairs damaged vehicles under 650 HP. |
 | **Girlfriend** | `/persona girlfriend` or `/girlfriend` | Romantic relationship; unlocks affectionate dialogue, dancing, kissing, and adult animations. |
 | **Custom** | `/persona custom <text>` | Defines a custom personality or roleplay instruction that persists in SQLite memory. |
 

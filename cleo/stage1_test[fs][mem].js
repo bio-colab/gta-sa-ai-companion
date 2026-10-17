@@ -144,6 +144,13 @@ let carFetchStartTime = 0;
 let carFetchLastDriveUpdate = 0;
 let carFetchPhase = 0; // 0 = sprint to car, 1 = enter car, 2 = drive car to CJ
 
+let diversionActive = false;
+let diversionCenterX = 0.0;
+let diversionCenterY = 0.0;
+let diversionCenterZ = 0.0;
+let diversionStartTime = 0;
+let lastDiversionTargetCheck = 0;
+
 let lastCarHealth = 1000;
 let lastCrashTime = 0;
 let lastThreatCheck = 0;
@@ -344,23 +351,32 @@ function isPedFemale(ped) {
 function findNearbyHostileVehicle(centerX, centerY, centerZ, maxRadius) {
     let bestCar = null;
     let bestDist = maxRadius;
+    let foundChopper = null;
+    let chopperDist = maxRadius * 1.5;
+    const CHOPPER_MODELS = [497, 425]; // 497 = Police Maverick, 425 = Hunter
     const POLICE_MODELS = [596, 597, 598, 599, 427, 433, 432, 497, 425, 528, 490];
     try {
-        let car = World.GetRandomCarInSphereNoSaveRecursive(centerX, centerY, centerZ, maxRadius, false, true);
+        let scanRadius = maxRadius * 1.5;
+        let car = World.GetRandomCarInSphereNoSaveRecursive(centerX, centerY, centerZ, scanRadius, false, true);
         while (car && Car.DoesExist(car) && !Car.IsDead(car)) {
             let model = car.getModel();
-            if (POLICE_MODELS.indexOf(model) !== -1) {
-                let pos = car.getCoordinates();
-                let d = Math.hypot(centerX - pos.x, centerY - pos.y, centerZ - pos.z);
+            let pos = car.getCoordinates();
+            let d = Math.hypot(centerX - pos.x, centerY - pos.y, centerZ - pos.z);
+            if (CHOPPER_MODELS.indexOf(model) !== -1) {
+                if (d < chopperDist) {
+                    chopperDist = d;
+                    foundChopper = car;
+                }
+            } else if (POLICE_MODELS.indexOf(model) !== -1 && d <= maxRadius) {
                 if (d < bestDist) {
                     bestDist = d;
                     bestCar = car;
                 }
             }
-            car = World.GetRandomCarInSphereNoSaveRecursive(centerX, centerY, centerZ, maxRadius, true, true);
+            car = World.GetRandomCarInSphereNoSaveRecursive(centerX, centerY, centerZ, scanRadius, true, true);
         }
     } catch (_) {}
-    return bestCar;
+    return foundChopper ? foundChopper : bestCar;
 }
 
 // فحص ما إذا كان الهدف قد هاجم اللاعب أو المرافق مؤخراً خلال نافذة الذاكرة (10 ثوانٍ) لمنع تراكم الضرر الأبدي
@@ -531,6 +547,220 @@ function playNpcAnimation(ped, animName, ifpName, loop, durationMs) {
     } catch (e) {
         log(`[AI ERROR] Failed to play animation ${animName}: ${e}`);
     }
+    return false;
+}
+
+// ====================================================================
+// النواة الأولى: معالج ومحلل الأوامر الأوفلاين (Native Offline Engine AI Router)
+// يعمل محلياً 100% داخل محرك اللعبة بدون إنترنت وبدون أي مفاتيح API وبزمن استجابة 0.0ms
+// ====================================================================
+function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
+    if (!rawCmd || rawCmd.length === 0) return false;
+    let cmd = rawCmd.toLowerCase().trim();
+    if (cmd.startsWith("/")) cmd = cmd.substring(1).trim();
+
+    let now = Date.now();
+
+    // 1. الأوضاع والشخصيات التخصصية (Personas)
+    if (cmd === "driver" || cmd === "transporter" || cmd === "chauffeur") {
+        currentNpcPersona = "driver";
+        Text.PrintStringNow("~b~[OFFLINE: DRIVER] Getaway Chauffeur Active! Ready to drive.~w~", 3500);
+        log("[OFFLINE AI] Activated Driver persona.");
+        return true;
+    } else if (cmd === "heavy" || cmd === "demolitions" || cmd === "artillery") {
+        currentNpcPersona = "heavy";
+        ped.addArmor(100);
+        giveNpcWeapon(ped, 35, 359, 30);  // RPG
+        giveNpcWeapon(ped, 27, 351, 150); // Combat Shotgun
+        Text.PrintStringNow("~r~[OFFLINE: HEAVY] Demolitions & Anti-Air Online! Armed with RPG.~w~", 3500);
+        log("[OFFLINE AI] Activated Heavy persona.");
+        return true;
+    } else if (cmd === "hitman" || cmd === "assassin") {
+        currentNpcPersona = "hitman";
+        ped.setAccuracy(100);
+        ped.setShootRate(100);
+        ped.setWeaponSkill(2);
+        giveNpcWeapon(ped, 31, 356, 800); // M4
+        giveNpcWeapon(ped, 24, 348, 300); // Desert Eagle
+        Text.PrintStringNow("~r~[OFFLINE: HITMAN] Lethal Hitman Active! 100% Accuracy & M4 equipped.~w~", 3500);
+        log("[OFFLINE AI] Activated Hitman persona.");
+        return true;
+    } else if (cmd === "medic" || cmd === "doctor") {
+        currentNpcPersona = "medic";
+        giveNpcWeapon(ped, 24, 348, 200);
+        Text.PrintStringNow("~g~[OFFLINE: MEDIC] Field Medic Ready! Auto-triage enabled.~w~", 3500);
+        log("[OFFLINE AI] Activated Medic persona.");
+        return true;
+    } else if (cmd === "companion" || cmd === "reset" || cmd === "default" || cmd === "normal") {
+        currentNpcPersona = "companion";
+        activeMode = "companion";
+        diversionActive = false;
+        carFetchActive = false;
+        ped.clearTasksImmediately();
+        let grp = player.getGroup();
+        grp.setLeader(playerChar);
+        grp.setMember(ped);
+        Text.PrintStringNow("~g~[OFFLINE: RESET] Default Companion Active.~w~", 3000);
+        log("[OFFLINE AI] Reset to default companion.");
+        return true;
+    }
+
+    // 2. أوامر الملاحة والقيادة (Vehicle & Navigation)
+    else if (cmd === "drive" || cmd === "go" || cmd === "target" || cmd === "waypoint" || cmd === "drive_to_target") {
+        if (ped.isInAnyCar()) {
+            let curCar = ped.getCarIsUsing();
+            if (curCar && Car.DoesExist(curCar)) {
+                let target = undefined;
+                try { target = World.GetTargetCoords(); } catch (_) {}
+                if (target && target.x !== undefined && (target.x !== 0 || target.y !== 0)) {
+                    let driveSpeed = (currentNpcPersona === "driver") ? 42.0 : 28.0;
+                    // نمط القيادة 2 = Avoid Cars (مراوغة الازدحام وتفادي الاصطدامات)
+                    Task.CarDriveToCoord(ped, curCar, target.x, target.y, target.z, driveSpeed, 0, 0, 2);
+                    Text.PrintStringNow("~b~[CHAUFFEUR] En route to target waypoint! (Speed: " + driveSpeed.toFixed(0) + ")~w~", 4000);
+                    log("[OFFLINE AI] Driving to waypoint: (" + target.x.toFixed(1) + ", " + target.y.toFixed(1) + ")");
+                } else {
+                    let cruiseSpeed = (currentNpcPersona === "driver") ? 35.0 : 22.0;
+                    Task.CarDriveWander(ped, curCar, cruiseSpeed, 2);
+                    Text.PrintStringNow("~y~[CHAUFFEUR] No map target set! Cruising around city...~w~", 3500);
+                    log("[OFFLINE AI] No waypoint set. Wandering around.");
+                }
+            }
+        } else {
+            Text.PrintStringNow("~y~[AI] Must be inside a car to drive! Use /bring first.~w~", 3000);
+        }
+        return true;
+    } else if (cmd === "bring" || cmd === "car" || cmd === "bring_car" || cmd === "fetch_car" || cmd === "jack") {
+        let cjPos = playerChar.getCoordinates();
+        let found = findClosestCar(cjPos.x, cjPos.y, cjPos.z, 75.0, playerChar, ped);
+        if (found.car && found.dist <= 75.0) {
+            carFetchActive = true;
+            carFetchCar = found.car;
+            carFetchStartTime = now;
+            carFetchLastDriveUpdate = 0;
+            carFetchPhase = 0;
+            ped.clearTasksImmediately();
+            let carPos = found.car.getCoordinates();
+            Task.GoToCoordAnyMeans(ped, carPos.x, carPos.y, carPos.z, 7, found.car);
+            Text.PrintStringNow("~g~[OFFLINE: VEHICLE] Sprinting to get that car for CJ!~w~", 3500);
+            log("[OFFLINE AI] Car fetch initiated locally.");
+        } else {
+            Text.PrintStringNow("~y~[AI] No vehicle found within 75m!~w~", 3000);
+        }
+        return true;
+    } else if (cmd === "exit" || cmd === "leave" || cmd === "leave_car") {
+        if (ped.isInAnyCar()) {
+            Task.LeaveAnyCar(ped);
+            Text.PrintStringNow("~y~[AI] Exiting vehicle...~w~", 2500);
+        }
+        return true;
+    }
+
+    // 3. مهمة التشتيت وصنع الفوضى التكتيكية (Diversion / Chaos Mode)
+    else if (cmd === "distract" || cmd === "chaos" || cmd === "rampage" || cmd === "diversion" || cmd === "cover") {
+        diversionActive = true;
+        let pPos = ped.getCoordinates();
+        diversionCenterX = pPos.x;
+        diversionCenterY = pPos.y;
+        diversionCenterZ = pPos.z;
+        diversionStartTime = now;
+        lastDiversionTargetCheck = 0;
+
+        // فك الارتباط من المجموعة ليتحرك ويقاتل بحرية دون مطاردة CJ
+        ped.removeFromGroup();
+        ped.clearTasksImmediately();
+
+        // تسليح ناري ملائم لمهمة التشتيت
+        let curWep = ped.getCurrentWeapon();
+        if (curWep === 0) {
+            giveNpcWeapon(ped, 31, 356, 800); // M4
+        }
+        ped.setAccuracy(90);
+        ped.setShootRate(100);
+
+        let threat = findNearbyThreat(playerChar, ped, 50.0);
+        if (threat) {
+            Task.KillCharOnFoot(ped, threat);
+        }
+
+        Text.PrintStringNow("~r~[DIVERSION ENGAGED] Holding off hostiles! Fall back, CJ!~w~", 4000);
+        log("[OFFLINE AI] Diversion mode activated! Companion detached to cover CJ.");
+        return true;
+    } else if (cmd === "regroup" || cmd === "come" || cmd === "follow" || cmd === "cancel" || cmd === "stop") {
+        diversionActive = false;
+        carFetchActive = false;
+        ped.clearTasksImmediately();
+        let grp = player.getGroup();
+        grp.setLeader(playerChar);
+        grp.setDefaultTaskAllocator(0);
+        grp.setFollowStatus(true);
+        grp.setMember(ped);
+        let cjPos = playerChar.getCoordinates();
+        Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        Text.PrintStringNow("~g~[REGROUP] Coming back to you, CJ!~w~", 3000);
+        log("[OFFLINE AI] Regroup command executed. Sprinting back to CJ.");
+        return true;
+    }
+
+    // 4. الدعم، الصحة، ومشاركة العتاد (Health & Gear Sharing)
+    else if (cmd === "heal" || cmd === "hesoyam" || cmd === "medkit" || cmd === "cure") {
+        restoreCharHealthAndArmour(playerChar);
+        restoreCharHealthAndArmour(ped);
+        Text.PrintStringNow("~g~[OFFLINE HEALTH] 100% Health & Armor Restored!~w~", 3500);
+        log("[OFFLINE AI] Full Health & Armor restored to player and companion.");
+        return true;
+    } else if (cmd === "gun" || cmd === "m4" || cmd === "rifle" || cmd === "weapon") {
+        givePlayerWeaponFromCompanion(31, 356, 500, "M4 Assault Rifle");
+        return true;
+    } else if (cmd === "pistol" || cmd === "deagle") {
+        givePlayerWeaponFromCompanion(24, 348, 200, "Desert Eagle");
+        return true;
+    } else if (cmd === "smg" || cmd === "mp5") {
+        givePlayerWeaponFromCompanion(29, 353, 400, "MP5 SMG");
+        return true;
+    } else if (cmd === "shotgun" || cmd === "spas") {
+        givePlayerWeaponFromCompanion(27, 351, 80, "Combat Shotgun");
+        return true;
+    } else if (cmd === "rpg" || cmd === "rocket") {
+        givePlayerWeaponFromCompanion(35, 359, 20, "Rocket Launcher");
+        return true;
+    } else if (cmd === "ammo") {
+        let curWep = playerChar.getCurrentWeapon();
+        if (curWep > 0) {
+            playerChar.giveWeapon(curWep, 300);
+            Text.PrintStringNow("~g~[GEAR TRANSFER] Supplied 300 rounds of ammo!~w~", 3500);
+        } else {
+            givePlayerWeaponFromCompanion(31, 356, 300, "M4 Rifle with Ammo");
+        }
+        return true;
+    }
+
+    // 5. المشاعر والحركات (Emotes)
+    else if (cmd === "dance") {
+        let female = isPedFemale(ped);
+        playNpcAnimation(ped, female ? "DAN_Loop_A" : "dnce_M_a", "DANCING", true, 12000);
+        Text.PrintStringNow("~g~[OFFLINE EMOTE] Dancing along to the music!~w~", 3500);
+        return true;
+    } else if (cmd === "smoke") {
+        let female = isPedFemale(ped);
+        playNpcAnimation(ped, female ? "F_smklean_loop" : "M_smk_loop", "SMOKING", false, 6000);
+        Text.PrintStringNow("~y~[OFFLINE EMOTE] Lighting up a cigarette...~w~", 3500);
+        return true;
+    } else if (cmd === "cheer" || cmd === "clap") {
+        playNpcAnimation(ped, "bd_clap", "DANCING", false, 4000);
+        Text.PrintStringNow("~g~[OFFLINE EMOTE] Cheering for CJ!~w~", 3500);
+        return true;
+    } else if (cmd === "drunk") {
+        playNpcAnimation(ped, "WALK_drunk", "PED", true, 12000);
+        Text.PrintStringNow("~p~[OFFLINE EMOTE] Stumbling around drunk!~w~", 3500);
+        return true;
+    }
+
+    // 6. قائمة المساعدة (Help)
+    else if (cmd === "help" || cmd === "commands" || cmd === "?") {
+        Text.PrintStringNow("~g~COMMANDS:~w~ /driver /heavy /hitman /medic /drive /bring /distract /heal /gun", 5000);
+        return true;
+    }
+
     return false;
 }
 
@@ -1144,8 +1374,13 @@ while (true) {
                         lastTextCmdSeq++;
                         IniFile.WriteString(finalCmd, INI_FILE, "GAME", "text_cmd");
                         IniFile.WriteInt(lastTextCmdSeq, INI_FILE, "GAME", "text_cmd_id");
-                        Text.PrintStringNow("~y~AI:~w~ Command Sent: " + safeGtaString(finalCmd), 2000);
-                        log(`[AI CHAT] Sent in-game text command #${lastTextCmdSeq}: "${finalCmd}"`);
+                        
+                        // معالجة الأمر محلياً 100% داخل محرك اللعبة (Native In-Engine Offline AI)
+                        let handledOffline = processLocalOfflineCommand(finalCmd, player, playerChar, activePed);
+                        if (!handledOffline) {
+                            Text.PrintStringNow("~y~AI:~w~ Command Sent: " + safeGtaString(finalCmd), 2000);
+                        }
+                        log(`[AI CHAT] In-game text command #${lastTextCmdSeq}: "${finalCmd}" (HandledOffline=${handledOffline})`);
                     }
                 }
                 // مسح حرف عبر Backspace (8)
@@ -1245,15 +1480,29 @@ while (true) {
             } catch (_) {}
         }
 
-        // 2. قدرة خبير المتفجرات ضد الشرطة (Heavy Demolitions Anti-Police Passive)
-        if (currentNpcPersona === "heavy" && (now - lastHeavyAlertTime > 15000)) {
+        // 2. قدرة خبير المتفجرات ضد الشرطة والمروحيات (Heavy Demolitions Anti-Police & Anti-Air Passive)
+        if (currentNpcPersona === "heavy" && (now - lastHeavyAlertTime > 12000)) {
             try {
                 let wantedLvl = player.storeWantedLevel();
                 if (wantedLvl >= 3) {
                     lastHeavyAlertTime = now;
+                    activePed.setArmour(100);
                     giveNpcWeapon(activePed, 35, 359, 20); // RPG
-                    Text.PrintStringNow("~r~[DEMOLITIONS ALERT] High Wanted Level! Rocket artillery ready!~w~", 3500);
-                    log("[AI HEAVY PASSIVE] Wanted level >= 3. Switched to Rocket Launcher.");
+                    let pedPos = activePed.getCoordinates();
+                    let hostileTarget = findNearbyHostileVehicle(pedPos.x, pedPos.y, pedPos.z, 80.0);
+                    if (hostileTarget && Car.DoesExist(hostileTarget) && !Car.IsDead(hostileTarget)) {
+                        Task.DestroyCar(activePed, hostileTarget);
+                        let m = hostileTarget.getModel();
+                        if (m === 497 || m === 425) {
+                            Text.PrintStringNow("~r~[ANTI-AIR DEFENSE] Police helicopter targeted with RPG!~w~", 3500);
+                        } else {
+                            Text.PrintStringNow("~r~[HEAVY DEFENSE] Police vehicle targeted with RPG!~w~", 3500);
+                        }
+                        log(`[AI HEAVY PASSIVE] Auto-targeting hostile police unit (model ${m}) with RPG.`);
+                    } else {
+                        Text.PrintStringNow("~r~[DEMOLITIONS ALERT] High Wanted Level! Rocket artillery ready!~w~", 3500);
+                        log("[AI HEAVY PASSIVE] Wanted level >= 3. Switched to Rocket Launcher & full armor.");
+                    }
                 }
             } catch (_) {}
         }
@@ -1552,8 +1801,39 @@ while (true) {
                 }
             }
 
+            // إدارة مهمة التشتيت وصنع الفوضى التكتيكية (Autonomous Diversion & Chaos Watchdog)
+            if (diversionActive) {
+                let cjPos = playerChar.getCoordinates();
+                let pedPos = activePed.getCoordinates();
+                let distToCj = Math.hypot(cjPos.x - pedPos.x, cjPos.y - pedPos.y, cjPos.z - pedPos.z);
+
+                // شروط انتهاء مهمة التمويه: ابتعاد CJ لأكثر من 140 متراً بنجاح أو مرور 45 ثانية
+                if (distToCj > 140.0 || (now - diversionStartTime > 45000)) {
+                    diversionActive = false;
+                    activePed.clearTasksImmediately();
+                    let grp = player.getGroup();
+                    grp.setLeader(playerChar);
+                    grp.setDefaultTaskAllocator(0);
+                    grp.setFollowStatus(true);
+                    grp.setMember(activePed);
+                    Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+                    Text.PrintStringNow("~g~[DIVERSION COMPLETE] CJ escaped safely! Squad regrouping!~w~", 4000);
+                    log(`[OFFLINE DIVERSION] Finished: Dist=${distToCj.toFixed(1)}m, Time=${((now - diversionStartTime) / 1000).toFixed(1)}s. Regrouping.`);
+                } else {
+                    // المرافق يطلق النار على أي عدو أو شرطة في محيط 55 متراً
+                    if (now - lastDiversionTargetCheck > 1800) {
+                        lastDiversionTargetCheck = now;
+                        let threat = findNearbyThreat(playerChar, activePed, 55.0);
+                        if (threat && Char.DoesExist(threat) && !Char.IsDead(threat)) {
+                            Task.KillCharOnFoot(activePed, threat);
+                            log("[OFFLINE DIVERSION] Engaging hostile target during chaos cover fire.");
+                        }
+                    }
+                }
+            }
+
             // نظام الركوب كراكب مع السائق المحترف ومنع طرد المرافق (Smart Chauffeur & Anti-Hijack)
-            if (!carFetchActive && activePed.isInAnyCar() && !playerChar.isInAnyCar()) {
+            if (!carFetchActive && !diversionActive && activePed.isInAnyCar() && !playerChar.isInAnyCar()) {
                 let compCar = activePed.getCarIsUsing();
                 if (compCar && Car.DoesExist(compCar) && !Car.IsDead(compCar)) {
                     let driver = compCar.getDriver();
@@ -1591,7 +1871,7 @@ while (true) {
             }
 
             // نظام المرافقة الذكية للمركبات
-            if (!carFetchActive && now - lastCarCheck > 800) {
+            if (!carFetchActive && !diversionActive && now - lastCarCheck > 800) {
                 lastCarCheck = now;
 
                 if (playerChar.isInAnyCar()) {
@@ -1633,7 +1913,7 @@ while (true) {
             // =========================================================
             // المرحلة 5.2: الذكاء التكتيكي المحلي التلقائي للشخصيات (Autonomous Persona Tactics Engine - 0 API Calls)
             // =========================================================
-            if (!carFetchActive && now - lastThreatCheck > 500) {
+            if (!carFetchActive && !diversionActive && now - lastThreatCheck > 500) {
                 lastThreatCheck = now;
                 try {
                     // فحص فوري: إذا كان الهدف الحالي قد مات أو اختفى، نوقف إطلاق النار فوراً
