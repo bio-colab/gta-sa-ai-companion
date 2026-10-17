@@ -99,6 +99,43 @@ Our goal was not merely to build a "chat mod", but to create a **physically embo
 
 ---
 
+### Phase 7: Deep Binary Forensics via REA (Reverse Engineer Anything) & Non-Invasive Memory Peeking
+
+* **The Transparency & Non-Invasive Principle**:
+  * **Zero Game Modification**: At no point was `gta_sa.exe` (SHA-256 `590b4be1bb005f4e07edf6b32df4a95b7ba403fb85472d68aa4275875b345b6f`) patched, hooked, cracked, or injected with unverified binary code. The game executable and asset files remain 100% vanilla and unmodified.
+  * **Investigation Toolchain**: We used **Reverse Engineer Anything (REA)**, orchestrating the **Ghidra 12.1.4 engine**, **Capstone Disassembler**, and **GNU objdump** to conduct an empirical X-ray analysis of the compiled 32-bit RenderWare binary.
+
+* **Forensic Discoveries & Empirical Layouts**:
+  1. **`CPed` Structural Dimensions (`sizeof = 0x7C4` / 1988 bytes)**:
+     * Dissected constructor `CPed::CPed` (`0x005E8030`) and destructor `CPed::~CPed` (`0x005E8C80`), proving the exact size via the compiler's magic division constant `0x41ee7ca7` (`imul ecx; sar edx, 9`).
+     * `+0x47C`: Dedicated pointer to `CPedIntelligence*`.
+     * `+0x480`: Pointer to `CPlayerData*` (non-null exclusively for the player, null for all NPCs—enabling a 1-instruction check).
+     * `+0x530`: Pedestrian State (`m_nPedState`: 1=IDLE, 3=ATTACK, 4=FIGHT, 9=FLEE, 14=DRIVE).
+     * `+0x58C`: Direct pointer to current vehicle (`CVehicle* m_pVehicle`).
+     * `+0x784`: Direct pointer to targeted entity (`m_pTargetedEntity`).
+  2. **`CPedIntelligence` & Decision Hierarchy (`sizeof = 0x294` / 660 bytes)**:
+     * Dissected constructor at `0x00607140` and `CTaskManager` at `0x006816A0`.
+     * **5 Primary Task Slots**: 0=Physical Damage, 1=Temporary Threat Panic, 2=Sustained Combat, 3=Primary Script/Wander Task, 4=Default Idle.
+     * **The Task Conflict Revelation**: Discovered why companion NPCs occasionally freeze or ignore orders under fire: game engine threat reactions (Slot 1) take natural mathematical precedence over script tasks (Slot 3) in `CTaskManager::GetActiveTask` (`0x006819D0`).
+     * **Perception Queue (`CEventGroup`)**: Dissected `0x004AB340` at `pIntelligence + 0x68`. Found `m_nCount` at `+0x70` holding up to 16 surrounding sound/vision events (`CEventGunShot`, `CEventExplosion`), giving the AI sensory perception of nearby gun battles.
+  3. **`CVehicle` & Pool Mathematics (`sizeof = 0xA18` / 2584 bytes)**:
+     * Dissected `CVehicle::CVehicle` (`0x006D5F10`) and vehicle handle resolution at `0x00410971`.
+     * Pool at `0x00B74494`. Driver at `+0x460`, passenger array at `+0x464`..`+0x484`, health at `+0x4C0`, door locks at `+0x4F8`.
+  4. **`CPedAudio` Vocalization Tracker (`pPed + 0x138`)**:
+     * Active speech ID tracked at `pPed + 0x1D8`. Allows detecting when the in-game ped is actively vocalizing/screaming.
+
+* **Handle-to-Pointer Resolution Formula**:
+  * Evaluated directly in CLEO Redux with slot generation bitmasking (`flag & 0x80 == 0` and `flag & 0x7F == handle & 0x7F`):
+    $$\text{pPed} = *(\text{uint32\_t}*)0xB74490 + ((\text{handle} \gg 8) \times 0x7C4)$$
+    $$\text{pVehicle} = *(\text{uint32\_t}*)0xB74494 + ((\text{vehHandle} \gg 8) \times 0xA18)$$
+
+* **The Implementation Outcome**:
+  * Upgraded `cleo/stage1_test[fs].js` to read direct memory fields defensively (`Memory.ReadU32`, `Memory.ReadFloat`).
+  * Expanded atomic telemetry packet from 29 to 35 fields in a single disk write.
+  * Python bridge and LLM brain now possess situational and tactical awareness (threat counting, target tracking, vehicle damage status).
+
+---
+
 ## 3. Summary of Core Design Decisions
 
 | Challenge | Explored Alternatives | Final Chosen Design | Rationale |
@@ -108,3 +145,4 @@ Our goal was not merely to build a "chat mod", but to create a **physically embo
 | **Speech-To-Text** | Local Whisper / Vosk | Groq Whisper Large v3 Turbo | 300ms latency, zero GPU/RAM load on the host machine. |
 | **IPC Mechanism** | TCP Sockets / Named Pipes | Atomic INI with Sequence IDs | Non-blocking, fault-tolerant, immune to game loop pauses. |
 | **Radar & Markers** | Custom 3D coordinates | Opcode `0187` + `018B` | Native map integration with zero immersion loss. |
+| **Engine State Inspection** | Binary hooking / EXE patching | REA Forensic X-Ray + Direct Read | 100% vanilla game preservation, zero risk of crashes. |
