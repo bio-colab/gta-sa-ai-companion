@@ -1226,64 +1226,81 @@ while (true) {
 
             let threatActive = (currentThreatChar !== null && Char.DoesExist(currentThreatChar) && !Char.IsDead(currentThreatChar)) ? 1 : 0;
 
-            IniFile.WriteInt(cjHealth, INI_FILE, "GAME", "cj_health");
-            IniFile.WriteInt(cjArmor, INI_FILE, "GAME", "cj_armor");
-            IniFile.WriteInt(cjWeapon, INI_FILE, "GAME", "cj_weapon");
-            IniFile.WriteInt(cjWanted, INI_FILE, "GAME", "cj_wanted");
-            IniFile.WriteInt(cjInCar ? 1 : 0, INI_FILE, "GAME", "cj_in_car");
-            IniFile.WriteInt(cjCarModel, INI_FILE, "GAME", "cj_car_model");
-            IniFile.WriteFloat(parseFloat(carSpeed.toFixed(1)), INI_FILE, "GAME", "car_speed");
-            IniFile.WriteInt(carRadio, INI_FILE, "GAME", "car_radio");
-            IniFile.WriteInt(carCrashedNow, INI_FILE, "GAME", "car_crashed");
-            IniFile.WriteInt(crashDamage, INI_FILE, "GAME", "crash_severity");
-            IniFile.WriteInt(clockHour, INI_FILE, "GAME", "clock_hour");
-            IniFile.WriteInt(clockMin, INI_FILE, "GAME", "clock_min");
-            IniFile.WriteInt(weatherId, INI_FILE, "GAME", "weather_id");
-            IniFile.WriteInt(onMission, INI_FILE, "GAME", "on_mission");
-            IniFile.WriteInt(threatActive, INI_FILE, "GAME", "threat_active");
-            IniFile.WriteString(zoneName, INI_FILE, "GAME", "cj_zone");
-            IniFile.WriteFloat(parseFloat(cjPos.x.toFixed(1)), INI_FILE, "GAME", "cj_x");
-            IniFile.WriteFloat(parseFloat(cjPos.y.toFixed(1)), INI_FILE, "GAME", "cj_y");
-            IniFile.WriteFloat(parseFloat(cjPos.z.toFixed(1)), INI_FILE, "GAME", "cj_z");
-
             let hasTarget = 0;
-            let targetX = 0.0;
-            let targetY = 0.0;
+            let targetXStr = "0.0";
+            let targetYStr = "0.0";
             try {
                 let t = World.GetTargetCoords();
                 if (t && t.x !== undefined && (t.x !== 0 || t.y !== 0)) {
                     hasTarget = 1;
-                    targetX = parseFloat(t.x.toFixed(1));
-                    targetY = parseFloat(t.y.toFixed(1));
+                    targetXStr = t.x.toFixed(1);
+                    targetYStr = t.y.toFixed(1);
                 }
             } catch (_) {}
-            IniFile.WriteInt(hasTarget, INI_FILE, "GAME", "target_active");
-            IniFile.WriteFloat(targetX, INI_FILE, "GAME", "target_x");
-            IniFile.WriteFloat(targetY, INI_FILE, "GAME", "target_y");
+
+            let npcActive = 0;
+            let pedHealth = 0;
+            let pedArmor = 0;
+            let pedModel = 0;
+            let pedInCar = 0;
+            let distStr = "0.0";
+            let pedWeapon = 0;
 
             if (activePed !== null && Char.DoesExist(activePed) && !Char.IsDead(activePed)) {
-                let pedHealth = activePed.getHealth();
-                let pedArmor = activePed.getArmor();
-                let pedModel = activePed.getModel();
-                let pedInCar = activePed.isInAnyCar();
-                let pedPos = activePed.getCoordinates();
-                let dist = Math.hypot(cjPos.x - pedPos.x, cjPos.y - pedPos.y, cjPos.z - pedPos.z);
-                let pedWeapon = 0;
+                npcActive = 1;
+                try { pedHealth = activePed.getHealth(); } catch (_) {}
+                try { pedArmor = activePed.getArmor(); } catch (_) {}
+                try { pedModel = activePed.getModel(); } catch (_) {}
+                try { pedInCar = activePed.isInAnyCar() ? 1 : 0; } catch (_) {}
+                try {
+                    let pedPos = activePed.getCoordinates();
+                    let d = Math.hypot(cjPos.x - pedPos.x, cjPos.y - pedPos.y, cjPos.z - pedPos.z);
+                    distStr = d.toFixed(1);
+                } catch (_) {}
                 try {
                     pedWeapon = activePed.getCurrentWeapon();
                 } catch (_) {}
-
-                IniFile.WriteInt(1, INI_FILE, "GAME", "npc_active");
-                IniFile.WriteInt(pedHealth, INI_FILE, "GAME", "npc_health");
-                IniFile.WriteInt(pedArmor, INI_FILE, "GAME", "npc_armor");
-                IniFile.WriteInt(pedModel, INI_FILE, "GAME", "npc_model");
-                IniFile.WriteInt(pedInCar ? 1 : 0, INI_FILE, "GAME", "npc_in_car");
-                IniFile.WriteFloat(parseFloat(dist.toFixed(1)), INI_FILE, "GAME", "npc_dist");
-                IniFile.WriteInt(pedWeapon, INI_FILE, "GAME", "npc_weapon");
-            } else {
-                IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
-                IniFile.WriteInt(0, INI_FILE, "GAME", "npc_weapon");
             }
+
+            let cjXStr = (cjPos && typeof cjPos.x === 'number') ? cjPos.x.toFixed(1) : "0.0";
+            let cjYStr = (cjPos && typeof cjPos.y === 'number') ? cjPos.y.toFixed(1) : "0.0";
+            let cjZStr = (cjPos && typeof cjPos.z === 'number') ? cjPos.z.toFixed(1) : "0.0";
+            let speedStr = (typeof carSpeed === 'number' && !isNaN(carSpeed)) ? carSpeed.toFixed(1) : "0.0";
+
+            // تجميع التيليميتري في حزمة ذرية واحدة لخفض عمليات القرص بنسبة 96.5% (1 كتابة بدلاً من 29)
+            let telemetryPacket = [
+                cjHealth,
+                cjArmor,
+                cjWeapon,
+                cjWanted,
+                cjInCar ? 1 : 0,
+                cjCarModel,
+                speedStr,
+                carRadio,
+                carCrashedNow,
+                crashDamage,
+                clockHour,
+                clockMin,
+                weatherId,
+                onMission,
+                threatActive,
+                zoneName,
+                cjXStr,
+                cjYStr,
+                cjZStr,
+                hasTarget,
+                targetXStr,
+                targetYStr,
+                npcActive,
+                pedHealth,
+                pedArmor,
+                pedModel,
+                pedInCar,
+                distStr,
+                pedWeapon
+            ].join("|");
+
+            IniFile.WriteString(telemetryPacket, INI_FILE, "GAME", "telemetry");
         } catch (e) {
             // صامت لحماية اللعبة
         }

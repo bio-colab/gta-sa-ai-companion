@@ -161,6 +161,23 @@ class SafeIniManager:
                         k, v = line.split("=", 1)
                         new_data[cur_sec][k.strip().lower()] = v.strip()
 
+                # فك حزمة التيليميتري المجمعة تلقائياً للحفاظ على التوافق الكامل بنسبة 100%
+                if "GAME" in new_data and "telemetry" in new_data["GAME"]:
+                    tele_val = new_data["GAME"]["telemetry"]
+                    if tele_val:
+                        parts = tele_val.split("|")
+                        if len(parts) >= 29:
+                            tele_keys = [
+                                "cj_health", "cj_armor", "cj_weapon", "cj_wanted", "cj_in_car",
+                                "cj_car_model", "car_speed", "car_radio", "car_crashed", "crash_severity",
+                                "clock_hour", "clock_min", "weather_id", "on_mission", "threat_active",
+                                "cj_zone", "cj_x", "cj_y", "cj_z", "target_active", "target_x", "target_y",
+                                "npc_active", "npc_health", "npc_armor", "npc_model", "npc_in_car",
+                                "npc_dist", "npc_weapon"
+                            ]
+                            for k, v in zip(tele_keys, parts):
+                                new_data["GAME"][k] = v
+
                 with self.lock:
                     self.data = new_data
                 return True
