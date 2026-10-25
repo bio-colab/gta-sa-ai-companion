@@ -67,13 +67,51 @@ function isSameEntity(a, b) {
 }
 
 // ====================================================================
-// REA Level 2/3 Hardware Pointers - قراءة الذاكرة المباشرة فائقة الأمان
+// REA Level 2/3 Hardware Pointers & Universal AOB Memory Scanner
 // ====================================================================
+let ADDR_PED_POOL = 0xB74490;
+let ADDR_VEHICLE_POOL = 0xB74494;
+let ADDR_WORLD_PLAYERS = 0x00B7CD98;
+let ADDR_PED_SAY = 0x005EFFE0;
+
+function initMemorySignatures() {
+    try {
+        if (typeof Memory.FindPattern === "function") {
+            // Pattern 1: CPools::GetPedPool and CPools::GetVehiclePool
+            let pPools = Memory.FindPattern("A1 ?? ?? ?? ?? C3 90 90 90 90 90 90 90 90 90 90 A1 ?? ?? ?? ?? C3", 0);
+            if (pPools) {
+                let dynamicPedPool = Memory.ReadU32(pPools + 1, false);
+                let dynamicVehPool = Memory.ReadU32(pPools + 17, false);
+                if (dynamicPedPool) ADDR_PED_POOL = dynamicPedPool;
+                if (dynamicVehPool) ADDR_VEHICLE_POOL = dynamicVehPool;
+                log(`[REA AOB] Dynamic Pools detected: PedPool=0x${ADDR_PED_POOL.toString(16)}, VehPool=0x${ADDR_VEHICLE_POOL.toString(16)}`);
+            }
+
+            // Pattern 2: FindPlayerPed -> CWorld::Players[0].m_pPed
+            let pFindPlayer = Memory.FindPattern("69 C0 90 01 00 00 8B 80 ?? ?? ?? ?? C3", 0);
+            if (pFindPlayer) {
+                let dynamicPlayers = Memory.ReadU32(pFindPlayer + 8, false);
+                if (dynamicPlayers) ADDR_WORLD_PLAYERS = dynamicPlayers;
+                log(`[REA AOB] Dynamic CWorld::Players detected: 0x${ADDR_WORLD_PLAYERS.toString(16)}`);
+            }
+
+            // Pattern 3: CPed::Say
+            let pSay = Memory.FindPattern("8B 44 24 04 66 85 C0 74 2A 8B 54 24 18 52", 0);
+            if (pSay) {
+                ADDR_PED_SAY = pSay;
+                log(`[REA AOB] Dynamic CPed::Say detected: 0x${ADDR_PED_SAY.toString(16)}`);
+            }
+        }
+    } catch (e) {
+        log(`[REA AOB Note] Defaulting to standard 1.0 memory offsets: ${e}`);
+    }
+}
+
 function getPedPointer(entity) {
     let handle = getHandle(entity);
     if (!handle || typeof handle !== "number") return 0;
     try {
-        let poolPtr = Memory.ReadU32(0xB74490, false);
+        let poolPtr = Memory.ReadU32(ADDR_PED_POOL, false);
         if (!poolPtr) return 0;
         let objectsArray = Memory.ReadU32(poolPtr, false);
         let byteMap = Memory.ReadU32(poolPtr + 4, false);
@@ -92,7 +130,7 @@ function getVehiclePointer(entity) {
     let handle = getHandle(entity);
     if (!handle || typeof handle !== "number") return 0;
     try {
-        let poolPtr = Memory.ReadU32(0xB74494, false);
+        let poolPtr = Memory.ReadU32(ADDR_VEHICLE_POOL, false);
         if (!poolPtr) return 0;
         let objectsArray = Memory.ReadU32(poolPtr, false);
         let byteMap = Memory.ReadU32(poolPtr + 4, false);
@@ -258,13 +296,61 @@ function restoreCharHealthAndArmour(charObj) {
         let pPed = getPedPointer(charObj);
         if (pPed === 0) {
             // فحص مؤشر اللاعب المباشر CWorld::Players[0].m_pPed
-            pPed = Memory.ReadU32(0x00B7CD98, false);
+            pPed = Memory.ReadU32(ADDR_WORLD_PLAYERS, false);
         }
         if (pPed !== 0) {
             Memory.WriteFloat(pPed + 0x540, 100.0, false); // m_fHealth
             Memory.WriteFloat(pPed + 0x548, 100.0, false); // m_fArmor
         }
     } catch (_) {}
+}
+
+// ====================================================================
+// REA Level 3 Engine Native Voice & Speech Triggers (0x005EFFE0)
+// تشغيل الأصوات الحقيقية للشخصيات من محرك اللعبة مع تحريك الفم تلقائياً
+// ====================================================================
+const NATIVE_SPEECH = {
+    RECRUIT: 126,       // JoinGangYes ("Alright, I'm with you!")
+    DISMISS: 150,       // OrderDisbandOne ("See ya later.")
+    ATTACK: 184,        // ShootGeneric ("Eat this!", "Die!")
+    PULL_GUN: 114,      // GunCool ("Yeah, now we're talking!")
+    ENTER_CAR: 35,      // CarGetIn ("Let's roll!")
+    CAR_FAST: 32,       // CarFast ("Hold on tight!")
+    COVER: 65,          // CoverMe ("Cover me! Fall back!")
+    FOLLOW: 154,        // OrderFollowNearOne ("Right behind you, CJ!")
+    AGREE: 162,         // PconvAgreeGood ("Hell yeah!")
+    GREET: 166          // PconvGreetMale ("What's up, CJ?")
+};
+
+let lastSpeechTime = 0;
+
+function makePedSpeak(pedChar, speechId, overridePriority = true) {
+    if (!pedChar || !Char.DoesExist(pedChar)) return false;
+    let now = Date.now();
+    if (!overridePriority && (now - lastSpeechTime < 2500)) return false;
+    lastSpeechTime = now;
+
+    try {
+        if (typeof pedChar.setSayContextImportant === "function") {
+            pedChar.setSayContextImportant(speechId, overridePriority, true, false);
+            return true;
+        } else if (typeof pedChar.setSayContext === "function") {
+            pedChar.setSayContext(speechId);
+            return true;
+        }
+    } catch (_) {}
+
+    // القناة الاحتياطية المباشرة في الذاكرة عبر مؤشر REA ودالة CPed::Say (0x005EFFE0)
+    try {
+        let pPed = getPedPointer(pedChar);
+        if (pPed !== 0) {
+            let sayFn = Memory.Fn.Thiscall(ADDR_PED_SAY, pPed);
+            let volInt = Memory.FromFloat(1.0);
+            sayFn(speechId, 0, volInt, overridePriority ? 1 : 0, 1, 0);
+            return true;
+        }
+    } catch (_) {}
+    return false;
 }
 
 // دالة تزويد CJ بالسلاح والعتاد من المرافق
@@ -569,6 +655,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         giveNpcWeapon(ped, 24, 348, 150); // Desert Eagle
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.ENTER_CAR, true);
         Text.PrintStringNow("~b~[OFFLINE: DRIVER] Getaway Chauffeur Active! Ready to drive.~w~", 3500);
         log("[OFFLINE AI] Activated Driver persona.");
         return true;
@@ -580,6 +667,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(35);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.PULL_GUN, true);
         Text.PrintStringNow("~r~[OFFLINE: HEAVY] Demolitions & Anti-Air Online! Armed with RPG.~w~", 3500);
         log("[OFFLINE AI] Activated Heavy persona.");
         return true;
@@ -593,6 +681,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(31);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.AGREE, true);
         Text.PrintStringNow("~r~[OFFLINE: HITMAN] Lethal Hitman Active! 100% Accuracy & M4 equipped.~w~", 3500);
         log("[OFFLINE AI] Activated Hitman persona.");
         return true;
@@ -604,6 +693,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         restoreCharHealthAndArmour(ped);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.AGREE, true);
         Text.PrintStringNow("~g~[OFFLINE: MEDIC] Field Medic Ready! Auto-triage enabled.~w~", 3500);
         log("[OFFLINE AI] Activated Medic persona.");
         return true;
@@ -621,6 +711,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         giveNpcWeapon(ped, 24, 348, 150);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.FOLLOW, true);
         Text.PrintStringNow("~g~[OFFLINE: RESET] Default Companion Active.~w~", 3000);
         log("[OFFLINE AI] Reset to default companion.");
         return true;
@@ -704,6 +795,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         }
 
         Text.PrintStringNow("~r~[DIVERSION ENGAGED] Holding off hostiles! Fall back, CJ!~w~", 4000);
+        makePedSpeak(ped, NATIVE_SPEECH.COVER, true);
         log("[OFFLINE AI] Diversion mode activated! Companion detached to cover CJ.");
         return true;
     } else if (cmd === "regroup" || cmd === "come" || cmd === "follow" || cmd === "cancel" || cmd === "stop") {
@@ -717,6 +809,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         grp.setMember(ped);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.FOLLOW, true);
         Text.PrintStringNow("~g~[REGROUP] Coming back to you, CJ!~w~", 3000);
         log("[OFFLINE AI] Regroup command executed. Sprinting back to CJ.");
         return true;
@@ -728,6 +821,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         restoreCharHealthAndArmour(ped);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.AGREE, true);
         Text.PrintStringNow("~g~[OFFLINE HEALTH] 100% Health & Armor Restored!~w~", 3500);
         log("[OFFLINE AI] Full Health & Armor restored to player and companion.");
         return true;
@@ -737,6 +831,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(31);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.PULL_GUN, true);
         Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with M4!~w~", 3500);
         return true;
     } else if (cmd === "pistol" || cmd === "deagle") {
@@ -745,6 +840,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(24);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.PULL_GUN, true);
         Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with Desert Eagle!~w~", 3500);
         return true;
     } else if (cmd === "smg" || cmd === "mp5") {
@@ -753,6 +849,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(29);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.PULL_GUN, true);
         Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with MP5!~w~", 3500);
         return true;
     } else if (cmd === "shotgun" || cmd === "spas") {
@@ -761,6 +858,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(27);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.PULL_GUN, true);
         Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with SPAS-12!~w~", 3500);
         return true;
     } else if (cmd === "rpg" || cmd === "rocket") {
@@ -769,6 +867,7 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         ped.setCurrentWeapon(35);
         let cjPos = playerChar.getCoordinates();
         Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+        makePedSpeak(ped, NATIVE_SPEECH.PULL_GUN, true);
         Text.PrintStringNow("~g~[GEAR] Both CJ & Companion armed with Rocket Launcher!~w~", 3500);
         return true;
     } else if (cmd === "ammo") {
@@ -815,6 +914,9 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
 try {
     IniFile.WriteInt(0, INI_FILE, "GAME", "npc_active");
 } catch (_) {}
+
+// مسح الذاكرة الحية تلقائياً عبر بصمات REA AOB لضمان التوافق المطلق مع أي نسخة من اللعبة
+initMemorySignatures();
 
 while (true) {
     wait(50);
@@ -1990,6 +2092,7 @@ while (true) {
                                 if (activePed.isWalking() || activePed.isRunning()) {
                                     activePed.clearTasks();
                                     Task.TurnCharToFaceChar(activePed, playerChar);
+                                    makePedSpeak(activePed, NATIVE_SPEECH.FOLLOW, false);
                                 }
                             } catch (_) {}
                         }
@@ -2093,7 +2196,7 @@ while (true) {
                                     }
                                 }
                             }
-                            // ب. القاتل المحترف (Hitman): هجوم فتاك بدقة استثنائية تتأثر بالثقة
+                            // ب. القاتل المحترف (Hitman): هجوم فتاك بدقة استثنائية واحتماء تكتيكي خلف السواتر
                             else if (currentNpcPersona === "hitman") {
                                 let curWep = activePed.getCurrentWeapon();
                                 if (curWep === 0) {
@@ -2105,9 +2208,21 @@ while (true) {
                                 activePed.setShootRate(hitmanRate);
                                 if (now - lastDriveByTime > 3000) {
                                     lastDriveByTime = now;
-                                    Task.KillCharOnFoot(activePed, threat);
-                                    Text.PrintStringNow(`~r~[HITMAN] Target in sight! Eliminating hostile! (Acc: ${hitmanAcc}%)~w~`, 2500);
-                                    log(`[AI HITMAN] Autonomous lethal headshot engagement! (Accuracy: ${hitmanAcc}%)`);
+                                    // REA Tactical Cover: تمييز أقرب مركبة كساتر وتفعيل الانحناء والاشتباك التكتيكي
+                                    try {
+                                        let nearbyCar = activePed.storeClosestEntities().carHandle;
+                                        if (nearbyCar && Car.DoesExist(nearbyCar)) {
+                                            nearbyCar.doesProvideCover(true);
+                                        }
+                                    } catch (_) {}
+                                    try {
+                                        Task.KillCharOnFootWhileDucking(activePed, threat, 1, 1000, 80);
+                                    } catch (_) {
+                                        Task.KillCharOnFoot(activePed, threat);
+                                    }
+                                    makePedSpeak(activePed, NATIVE_SPEECH.ATTACK, false);
+                                    Text.PrintStringNow(`~r~[HITMAN TACTICAL] Suppressing target from cover! (Acc: ${hitmanAcc}%)~w~`, 2500);
+                                    log(`[AI HITMAN] Autonomous tactical cover engagement! (Accuracy: ${hitmanAcc}%)`);
                                 }
                             }
                             // ج. المعالج الميداني (Medic): دفاع محكم وحماية CJ
@@ -2134,7 +2249,7 @@ while (true) {
                                     log("[AI GIRLFRIEND] Emotional protective reaction during combat.");
                                 }
                             }
-                            // هـ. الوضع العادي (Companion): دفاع متدرج وفق مستوى الثقة والشجاعة
+                            // هـ. الوضع العادي (Companion): دفاع متدرج وفق مستوى الثقة والشجاعة مع الاحتماء عند انخفاض الصحة
                             else {
                                 let curWep = activePed.getCurrentWeapon();
                                 if (curWep === 0) {
@@ -2146,9 +2261,32 @@ while (true) {
                                 activePed.setShootRate(compRate);
                                 if (now - lastDriveByTime > 4000) {
                                     lastDriveByTime = now;
-                                    Task.KillCharOnFoot(activePed, threat);
-                                    Text.PrintStringNow(`~r~[AI COMBAT] DEFENDING CJ! (Trust: ${Math.floor(companionTrust * 100)}%)~w~`, 2500);
-                                    log(`[AI COMBAT] Autonomous threat defense: engaging on foot (Accuracy: ${compAcc}%, ShootRate: ${compRate}%).`);
+                                    let compHealth = 100.0;
+                                    try { compHealth = activePed.getHealth(); } catch (_) {}
+
+                                    // تفعيل الساتر التكتيكي إذا كان المرافق مصاباً أو ثقته عالية
+                                    try {
+                                        let nearbyCar = activePed.storeClosestEntities().carHandle;
+                                        if (nearbyCar && Car.DoesExist(nearbyCar)) {
+                                            nearbyCar.doesProvideCover(true);
+                                        }
+                                    } catch (_) {}
+
+                                    if (compHealth < 50) {
+                                        try {
+                                            Task.KillCharOnFootWhileDucking(activePed, threat, 1, 1500, 70);
+                                        } catch (_) {
+                                            Task.KillCharOnFoot(activePed, threat);
+                                        }
+                                        makePedSpeak(activePed, NATIVE_SPEECH.COVER, true);
+                                        Text.PrintStringNow(`~r~[AI COMBAT] Taking Cover! (Health: ${Math.floor(compHealth)}%)~w~`, 2500);
+                                        log(`[AI COMBAT] Low health tactical cover active.`);
+                                    } else {
+                                        Task.KillCharOnFoot(activePed, threat);
+                                        makePedSpeak(activePed, NATIVE_SPEECH.ATTACK, false);
+                                        Text.PrintStringNow(`~r~[AI COMBAT] DEFENDING CJ! (Trust: ${Math.floor(companionTrust * 100)}%)~w~`, 2500);
+                                        log(`[AI COMBAT] Autonomous threat defense: engaging on foot (Accuracy: ${compAcc}%, ShootRate: ${compRate}%).`);
+                                    }
                                 }
                             }
                         }
@@ -2252,11 +2390,15 @@ while (true) {
                         player.setGroupToFollowAlways(true); // منع أمر H من إيقاف الشخصية
                         activePed.setNeverLeavesGroup(true);
                         activePed.setNeverTargeted(true);
+                        try {
+                            activePed.setAllowedToDuck(true);
+                        } catch (_) {}
 
                         // 4. تسليح المرافق فوراً بمسدس تكتيكي للدفاع عن النفس واستدعاؤه نحو CJ
                         giveNpcWeapon(activePed, 24, 348, 150);
                         let cjPos = playerChar.getCoordinates();
                         Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+                        makePedSpeak(activePed, NATIVE_SPEECH.RECRUIT, true);
 
                         // 4. إنشاء علامة الرادار الخضراء كأعضاء العصابة الرسميين
                         try {
@@ -2303,6 +2445,7 @@ while (true) {
             } else {
                 try {
                     // إلغاء التحكم وإطلاق سراح الشخصية بأمان
+                    makePedSpeak(activePed, NATIVE_SPEECH.DISMISS, true);
                     if (activePed.isInAnyCar()) {
                         Task.LeaveAnyCar(activePed);
                     }
