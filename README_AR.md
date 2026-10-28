@@ -5,7 +5,7 @@
 [![Platform: Universal GTA SA](https://img.shields.io/badge/Platform-GTA%20SA%20(v1.0%20%7C%20v1.01%20%7C%20Steam%20%7C%20SilentPatch)-green.svg)](https://www.rockstargames.com/)
 [![Runtime: CLEO Redux](https://img.shields.io/badge/CLEO-Redux%20JS-orange.svg)](https://re.cleo.li/)
 [![AI: Dual-Tier Architecture](https://img.shields.io/badge/AI-Dual--Tier%20(100%25%20Offline%20Native%20%2B%20Augmented%20LLM)-purple.svg)]()
-[![CI: Quality Assurance](https://img.shields.io/badge/CI-Passing-brightgreen.svg)]()
+[![CI: Quality Assurance](https://github.com/bio-colab/gta-sa-ai-companion/actions/workflows/ci.yml/badge.svg)](https://github.com/bio-colab/gta-sa-ai-companion/actions/workflows/ci.yml)
 [![Tests: 21 Passed](https://img.shields.io/badge/Tests-21%2F21%20Passing-brightgreen.svg)]()
 [![CLI: Agent Native](https://img.shields.io/badge/CLI--Anything-Compliant%20(8%2F8)-blue.svg)]()
 [![Release: v1.0.0](https://img.shields.io/badge/Release-v1.0.0-orange.svg)](https://github.com/bio-colab/gta-sa-ai-companion/releases)
