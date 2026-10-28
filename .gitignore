@@ -23,7 +23,12 @@ AINPC/memory.db
 cleo_redux.log
 scratch/
 tests/scratch/
-test_*.py
+# Scratch test files (keep pytest suite in agent-harness tracked)
+scratch/test_*.py
+!agent-harness/**/test_*.py
+
+# Distribution zip archives
+*.zip
 
 # Operating system files
 Thumbs.db
