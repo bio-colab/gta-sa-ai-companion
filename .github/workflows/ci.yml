@@ -1,0 +1,36 @@
+name: CI - Quality Assurance & Tests
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  test:
+    name: Run Test Suite & Compliance
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest click prompt-toolkit
+          pip install -e agent-harness
+
+      - name: Validate CLEO JavaScript Syntax
+        run: |
+          node -c "cleo/stage1_test[fs][mem].js"
+
+      - name: Run Pytest Suite (Unit & Subprocess Tests)
+        run: |
+          python -m pytest agent-harness/cli_anything/gta_companion/tests -v

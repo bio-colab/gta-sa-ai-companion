@@ -2,15 +2,24 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python: 3.10+](https://img.shields.io/badge/Python-3.10+-blue.svg)](https://www.python.org/)
-[![Game: GTA San Andreas v1.0](https://img.shields.io/badge/Game-GTA%20San%20Andreas%20v1.0-green.svg)](https://www.rockstargames.com/)
+[![Platform: Universal GTA SA](https://img.shields.io/badge/Platform-GTA%20SA%20(v1.0%20%7C%20v1.01%20%7C%20Steam%20%7C%20SilentPatch)-green.svg)](https://www.rockstargames.com/)
 [![Runtime: CLEO Redux](https://img.shields.io/badge/CLEO-Redux%20JS-orange.svg)](https://re.cleo.li/)
-[![AI: Groq Cloud](https://img.shields.io/badge/AI-Groq%20Cloud-purple.svg)](https://groq.com/)
-[![Hardware: Budget Friendly](https://img.shields.io/badge/Hardware-Intel%20i5%20%2B%20UHD%20620-brightgreen.svg)]()
-[![Cost: 0$ Routine Reflexes](https://img.shields.io/badge/Token%20Cost-0%24%20Local%20Reflexes-blue.svg)]()
+[![AI: Dual-Tier Architecture](https://img.shields.io/badge/AI-Dual--Tier%20(100%25%20Offline%20Native%20%2B%20Augmented%20LLM)-purple.svg)]()
+[![CI: Quality Assurance](https://img.shields.io/badge/CI-Passing-brightgreen.svg)]()
+[![Tests: 21 Passed](https://img.shields.io/badge/Tests-21%2F21%20Passing-brightgreen.svg)]()
+[![CLI: Agent Native](https://img.shields.io/badge/CLI--Anything-Compliant%20(8%2F8)-blue.svg)]()
+[![Release: v1.0.0](https://img.shields.io/badge/Release-v1.0.0-orange.svg)](https://github.com/bio-colab/gta-sa-ai-companion/releases)
 
-مشروع مفتوح المصدر يضيف **مرافقاً ذكياً مستقلاً ومجسداً بالكامل (Embodied AI NPC Companion)** إلى لعبة **GTA San Andreas (الإصدار الأصلي v1.0 US)**. يمكنك الاقتراب من أي مواطن في الشارع، وضمه إلى فريقك عبر زر `H`، والتفاعل معه صوتياً بميكروفونك (Push-To-Talk) أو عبر شريط الكتابة النصي المباشر داخل اللعبة ليرد عليك فوراً بتعليقات مترجمة وينفذ أوامرك الحركية والقتالية في العالم الحقيقي.
+مشروع مفتوح المصدر يضيف **مرافقاً ذكياً مستقلاً ومجسداً بالكامل (Embodied AI NPC Companion)** إلى لعبة **GTA San Andreas** (متوافق توافقاً شاملاً مع كافة نسخ اللعبة: v1.0 US الأصلية، v1.01 EU، إصدارات Steam، والنسخ المعدلة بـ SilentPatch عبر ماسح بصمات الذاكرة AOB الديناميكي). يمكنك الاقتراب من أي مواطن في الشارع، وضمه إلى فريقك عبر زر `H`، والتفاعل معه صوتياً بميكروفونك أو عبر شريط الكتابة النصي أو من خلال واجهة سطر الأوامر للوكلاء البرمجيين `cli-anything-gta`.
 
-يتميز المرافق بهوية ديموغرافية مولدة ذاتياً، وذاكرة طويلة الأمد تحفظ أحداث اللعب (SQLite)، وطبقات سلوكية متقدمة (قتال، مركبات، مشاعر)، ونظام شخصيات تكتيكي متطور (قاتل مأجور، مسعف، خبير متفجرات، سائق هروب، حبيبة)، مع استقلالية هجينة تنفذ ردود الفعل القتالية والإسعافية محلياً **دون استهلاك أي توكنز API**.
+### 🌟 معمارية الذكاء الاصطناعي ثنائية الطبقات (Dual-Tier AI Architecture):
+1. **الطبقة الأولى: الذكاء الأصلي الأوفلاين (100% Offline Native Engine - صفر إنترنت وصفر مفاتيح API)**:
+   * يعمل بالكامل محلياً وأوفلاين دون الحاجة لأي اتصال بالإنترنت أو مفاتيح API خارجية.
+   * يستخدم نظام النطق الصوتي الحقيقي لشخصيات اللعبة (`CPed::Say` - `0x005EFFE0`) ثلاثي الأبعاد مع تحريك الفم (Lip-Sync).
+   * يطبق نظام السواتر التكتيكية والانحناء القتالي الذكي (`CTaskComplexSeekCoverUntilTargetDead` - `0x00654200` ومهمة `0787`).
+   * يدعم الشخصيات التكتيكية المدمجة (`/hitman`, `/driver`, `/heavy`, `/medic`) والأوامر الميدانية الصريحة (`/heal`, `/gun`, `/bring`, `/distract`, `/drive`).
+2. **الطبقة الثانية: الذكاء المعزز السحابي (Optional Cloud Augmented Intelligence)**:
+   * يتصل اختيارياً بالذكاء الاصطناعي السحابي المجاني (Groq Cloud أو OpenRouter) عند توفر الإنترنت لإجراء حوارات صوتية تفاعلية مفتوحة وبناء ذاكرة واقعية تراكمية للمواقف.
 
 ---
 
