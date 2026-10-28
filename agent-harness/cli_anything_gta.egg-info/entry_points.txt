@@ -1,0 +1,2 @@
+[console_scripts]
+cli-anything-gta = cli_anything.gta_companion.gta_cli:main
