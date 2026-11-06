@@ -48,10 +48,60 @@
   - `active_mode`, `active_persona`, `trust_level`, `bravery`
 - **Session State (`session.json`):** Local CLI session tracking recent commands, audit history, and active target.
 
-## Command Groups
-1. **`status` / `info`**: Non-destructive probe of game process, connection state, and active companion.
-2. **`telemetry`**: Instant inspection of player stats, vehicle status, crime level, and environmental context.
-3. **`companion`**: Full lifecycle management: `spawn`, `dismiss`, `persona`, `order`, `equip`, `speak`.
-4. **`memory`**: Verification of live memory pools and REA reverse-engineered AOB signatures.
-5. **`config`**: Reading and updating bridge settings and active persona traits.
-6. **`repl`**: Interactive shell with auto-completion and styled prompt.
+## Command Groups & Subsystems
+
+1. **`status` / `info`**: Non-destructive probe of game process, connection state, and active companion entity.
+2. **`telemetry`**: Instant inspection of live player stats, vehicle status, crime level, and environmental context (clock, zone, weather).
+3. **`companion`**: Full companion lifecycle & tactical management:
+   - `persona <hitman|driver|heavy|medic|girlfriend>`: Behavioral profile switching.
+   - `order <follow|stay|cover|attack|heal|dismiss>`: Tactical order dispatch.
+   - `equip <m4|ak47|sniper|deagle|shotgun|smg|rpg>`: Direct weapon & ammo provisioning.
+   - `speak <phrase>`: Authentic 3D in-engine voice playback with lip-sync.
+   - `dismiss`: Safe group disengagement.
+4. **`memory`**: Memory inspection and cross-version signature resolution:
+   - `signatures`: Catalogs verified AOB signatures and hardware object pools (`CPedPool`, `CVehiclePool`, `CWorld::Players`).
+   - `resolve [--exe PATH] [--no-ini]`: **Automated 16-D Semantic Behavioral Memory Resolver**. Scans any GTA SA executable (Steam, v1.01, modded), vectorizes candidate functions into 16-dimensional behavioral embeddings, and writes verified offsets (`ped_say`, `task_cover`, `los_raycast`, `ped_pool`, `veh_pool`, `world_players`) directly into `cleo/ainpc_bridge.ini`.
+5. **`config`**: Reading and updating bridge settings, target executable path, and active persona traits.
+6. **`repl`**: Interactive terminal shell with auto-completion, contextual command help, and session persistence.
+
+## Deterministic JSON Contract Example
+
+Every CLI command supports `--json` for zero-parsing-ambiguity external automation:
+
+```bash
+cli-anything-gta memory resolve --json
+```
+
+```json
+{
+  "status": "success",
+  "executable": "D:\\GTA san andreas\\gta_sa.exe",
+  "executable_size": 14383616,
+  "machine": "x86 (32-bit)",
+  "sha256": "590b4be1bb005f4e07edf6b32df4a95b7ba403fb85472d68aa4275875b345b6f",
+  "version_detected": "v1.0 US (Original / HOODLUM)",
+  "resolved_addresses": {
+    "ped_say": "0x005EFFE0",
+    "task_cover": "0x00654200",
+    "los_raycast": "0x0056A490",
+    "ped_pool": "0x00B74490",
+    "veh_pool": "0x00B74494",
+    "world_players": "0x00B7CD98"
+  },
+  "confidence_scores": {
+    "ped_say": 0.9999,
+    "task_cover": 1.0,
+    "los_raycast": 1.0,
+    "ped_pool": 1.0,
+    "veh_pool": 1.0,
+    "world_players": 1.0
+  },
+  "semantic_matching_engine": "REA-Neural (16-D Continuous Behavioral Vectors)",
+  "ini_updated": true,
+  "ini_file": "D:\\GTA san andreas\\cleo\\ainpc_bridge.ini"
+}
+```
+
+## Developer & Low-Level Specifications Reference
+* For RenderWare struct offsets, pool indexing math, and assembly signatures: **[Engine Internals (`docs/ENGINE_INTERNALS.md`)](../docs/ENGINE_INTERNALS.md)**
+* For dual-tier failover, IPC packet structures, and opcode safety rules: **[System Architecture (`docs/ARCHITECTURE.md`)](../docs/ARCHITECTURE.md)**

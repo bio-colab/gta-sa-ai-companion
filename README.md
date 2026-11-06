@@ -426,6 +426,19 @@ In the spirit of **complete engineering transparency and scientific rigor**, her
 
 ---
 
+## 📚 Developer & Technical Documentation
+
+For developers, systems architects, and reverse engineers interested in the inner workings of the project:
+
+* 📐 **[System Architecture & IPC Specification (docs/ARCHITECTURE.md)](docs/ARCHITECTURE.md)**: Dual-tier intelligence architecture, 4-second failover state machine, IPC packet formats, sequence counters, and opcode safety rules.
+* 🔬 **[Engine Internals & Reverse Engineering Specifications (docs/ENGINE_INTERNALS.md)](docs/ENGINE_INTERNALS.md)**: Low-level RenderWare memory layout (CPed, CVehicle), memory pool indexing math, calling conventions (__thiscall vs __cdecl), 16-D semantic behavioral vector resolver math, physics line-of-sight raycasting, and in-engine audio state tracking.
+* 🎯 **[Action Catalog & Opcode Matrix (docs/ACTION_CATALOG.md)](docs/ACTION_CATALOG.md)**: Complete catalog of actions, animations, native voice IDs, weapons, and driving parameters.
+* 🎮 **[Native In-Engine Offline Commands (docs/OFFLINE_COMMANDS.md)](docs/OFFLINE_COMMANDS.md)**: Full literal command reference for the 100% offline companion.
+* 🤖 **[Agent-Native CLI Harness (gent-harness/GTA_COMPANION.md)](agent-harness/GTA_COMPANION.md)**: HKUDS CLI-Anything compliant harness design, deterministic JSON contracts, and REPL reference.
+* 🚀 **[Release Notes v1.0.0 (docs/RELEASE_NOTES_v1.0.0.md)](docs/RELEASE_NOTES_v1.0.0.md)**: Milestones, test results, and release highlights.
+
+---
+
 ## 📜 License
 
 This project is licensed under the [MIT License](LICENSE).

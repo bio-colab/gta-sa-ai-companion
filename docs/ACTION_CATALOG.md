@@ -1,31 +1,31 @@
 # GTA San Andreas AI Companion - Action Catalog & Layered Modes
 
-The companion AI utilizes a layered architecture where actions are partitioned into dedicated operational modes to prevent command interference.
+The companion AI utilizes a layered architecture where actions are partitioned into dedicated operational modes to prevent command interference and guarantee immediate response times.
 
 ---
 
 ## 1. Layered Modes Overview
 
-The AI Companion operates in four distinct layers. When a player talks to the NPC, the LLM determines whether to switch the active mode or execute an action within the current mode.
+The AI Companion operates in four distinct operational layers. When a player interacts with the companion (via voice, text, or CLI), the decision engine routes the command to the active mode or switches modes dynamically.
 
 | Mode | Focus | Description |
 | :--- | :--- | :--- |
-| `companion` (Default) | Following & Life | General following, dialogue, healing, looking around. |
-| `combat` | Firearms & Defense | Weapons equipment, shootout defense, vehicle drive-by. |
-| `vehicle` | Driving & Navigation | Car retrieval, cruising, driving to map target markers. |
-| `emote` | Social & Fun | Dancing, smoking, drunk behavior, cheering, kisses. |
+| `companion` (Default) | Following & Life | General following, dialogue, healing, triage, looking around. |
+| `combat` | Firearms & Defense | Weapons equipment, tactical cover, shootout defense, vehicle drive-by. |
+| `vehicle` | Driving & Navigation | Car retrieval, cruising, driving to map target markers, getaway. |
+| `emote` | Social & Fun | Dancing, smoking, drunk behavior, cheering, kisses, romantic emotes. |
 
 ---
 
 ## 2. Mode Actions & Opcode Matrix
 
 ### 2.1 Mode: `companion`
-| Action Command | Opcode / Implementation | Description | Example Voice Prompt |
+| Action Command | Opcode / Implementation | Description | Example Voice Prompt / Trigger |
 | :--- | :--- | :--- | :--- |
 | `follow_player` | `grp.setMember(ped)` | Returns to CJ and follows on foot or in vehicle. | "Follow me", "Come here", "Let's roll" |
 | `look_at_player` | `ped.lookAtChar(playerChar, 3000)` | Turns head towards CJ to make eye contact. | "Look at me", "Listen up" |
 | `face_player` | `ped.turnToFaceChar(playerChar)` | Rotates full body towards CJ. | "Face me", "Look this way" |
-| `heal` | Direct Memory + Engine | Restores 100% health & 100% armor for both CJ and companion. | "Heal me", "First aid", "Hesoyam" |
+| `heal` / `cpr` / `revive`| `checkAndExecuteMedicRevival` + Direct RAM | Restores 100% health & armor; triggers CPR resuscitation animation (`CPR`/`MEDIC`) and adrenaline injection. | "Heal me", "Medic!", "Revive", "CPR" |
 | `give_cj_weapon` | `givePlayerWeapon` | Companion hands CJ an assault rifle / weapon with ammo. | "Give me a gun", "Give me a weapon", "Arm me" |
 | `give_cj_ammo` | `playerChar.giveWeapon` | Companion supplies CJ with 300 rounds of ammo for current gun. | "Give me ammo", "Need more rounds", "Share ammo" |
 | `attack_threat` | `Task.KillCharOnFoot(ped, threat)` | Engages nearby hostile attacking CJ. | "Take him down!", "Get him!" |
@@ -45,6 +45,7 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 | `arm_uzi` | Micro Uzi (ID 28) | 352 | 500 | Equips compact one-handed machine pistol. | "Equip the Uzi", "Pull out the Micro Uzi" |
 | `arm_shotgun` | Shotgun (ID 25) | 349 | 100 | Equips classic pump-action shotgun. | "Grab the shotgun", "Get the 12-gauge" |
 | `disarm` | Unarmed (ID 0) | - | 0 | Cleans hands, holsters weapons safely. | "Holster your gun", "Put it away" |
+| `cover` | `CTaskComplexSeekCover` (`0x00654200`) | - | - | Marks closest car as cover (`0787`) and ducks behind it. | "Take cover!", "Duck down!", "Get behind the car!" |
 | `driveby` | Active Weapon | - | - | Hangs out the vehicle window firing at hostiles. | "Drive-by time!", "Hang out the window!" |
 | `hands_up` | `Task.HandsUp(ped, 3000)` | - | - | Raises hands in surrender (police standoff). | "Put your hands up!", "Don't shoot!" |
 
@@ -53,7 +54,7 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 ### 2.3 Mode: `vehicle`
 | Action Command | Opcode / Implementation | Description | Example Voice Prompt |
 | :--- | :--- | :--- | :--- |
-| `fetch_car` | 3-Phase Engine | Sprints to nearest empty car, enters, drives to CJ. | "Bring me a car", "Go find a ride" |
+| `fetch_car` | 3-Phase Engine (`0AE2`) | Sprints to nearest empty car, enters, drives to CJ. | "Bring me a car", "Go find a ride" |
 | `drive_wander` | `Task.CarDriveWander` | Drives around San Andreas casually while CJ chills (Speed: 22.0 or 38.0 for Driver). | "Just drive around", "Take the wheel" |
 | `drive_to_target` | `Task.CarDriveToCoord` | Drives CJ directly to the yellow target map marker (Speed: 28.0 or 40.0 for Driver). | "Drive to my marker", "Take us there" |
 | `exit_car` | `Task.LeaveAnyCar` | Steps out of the car safely. | "Get out of the car", "Step out" |
@@ -75,13 +76,35 @@ The AI Companion operates in four distinct layers. When a player talks to the NP
 
 ---
 
-### 2.5 Persona System (`/persona`)
+## 3. Native Engine Speech Events (`CPed::Say` at `0x005EFFE0`)
+
+The companion triggers authentic 3D spatial voices directly from the game's audio bank files, synchronized with the in-engine lip-sync motor:
+
+| Speech Key | Context ID | Native Sound Event | Example In-Game Dialogue |
+| :--- | :---: | :--- | :--- |
+| `RECRUIT` | `126` | `JoinGangYes` | "Alright, I'm with you!", "Let's roll!" |
+| `DISMISS` | `150` | `OrderDisbandOne` | "See ya later, CJ.", "Catch you on the block." |
+| `ATTACK` | `184` | `ShootGeneric` | "Eat this!", "Die, motherfucker!", "Grove Street!" |
+| `PULL_GUN` | `114` | `GunCool` | "Yeah, now we're talking!", "Locked and loaded." |
+| `ENTER_CAR`| `35` | `CarGetIn` | "Let's roll!", "Shotgun!" |
+| `CAR_FAST` | `32` | `CarFast` | "Hold on tight!", "Watch the road, fool!" |
+| `COVER` | `65` | `CoverMe` | "Cover me! Fall back!", "Take cover!" |
+| `FOLLOW` | `154` | `OrderFollowNearOne` | "Right behind you, CJ!", "On your six!" |
+| `AGREE` | `162` | `PconvAgreeGood` | "Hell yeah!", "You got it, CJ." |
+| `GREET` | `166` | `PconvGreetMale` | "What's up, CJ?", "How's it going?" |
+| `HEAL` | `162` | `PconvAgreeGood` (Medic Context) | "Hang on CJ, administering CPR and adrenaline!" |
+| `REVIVE` | `154` | `OrderFollowNearOne` (Triage) | "You're gonna make it! Back on your feet!" |
+
+---
+
+## 4. Persona System (`/persona`)
+
 Specialized operational roles with dynamic in-game stat overrides:
 
 | Persona | Key Stats & Overrides | In-Engine Autonomous Reflexes (0 API Cost) | Command Shortcut |
 | :--- | :--- | :--- | :--- |
-| **Hitman** | 100% Accuracy, 100 Shoot Rate, M4 & Deagle | Autonomous lethal engagement against threats, Ballas, Vagos, and police up to 65m. | `/persona hitman`, `/hitman` |
-| **Field Medic** | 65% Accuracy, Deagle sidearm, Defensive | Autonomous Field Triage: heals CJ to 100 HP + 50 armor whenever CJ drops below 70 HP (18s cooldown). | `/persona medic`, `/medic` |
+| **Hitman** | 100% Accuracy, 100 Shoot Rate, M4 & Deagle | Autonomous lethal engagement against threats, Ballas, Vagos, and police up to 65m using Line-of-Sight Raycasting. | `/persona hitman`, `/hitman` |
+| **Field Medic** | 65% Accuracy, Deagle sidearm, Defensive | Autonomous Field Triage: heals CJ whenever health $\le 22.0$ or enters dying state `51`; executes CPR resuscitation and adrenaline revival. | `/persona medic`, `/medic`, `/heal`, `/cpr` |
 | **Demolitions** | Heavy RPG (ID 35), SPAS-12, 100 Armor | Anti-Air & Anti-Vehicle: Locks onto and destroys police cruisers, SWAT vans, and police helicopters with rockets (Wanted $\ge 2$). | `/persona heavy`, `/heavy` |
 | **Transporter** | Evasion Speed: 35.0 - 50.0 (scales with trust), Auto-repair | Autonomous Getaway: hops in as driver if CJ enters passenger seat; auto-repairs engine health if damaged. | `/persona driver`, `/driver` |
 | **Girlfriend** | Romance / Club emotes unlocked | Affectionate greetings and idle waves; cowers and screams protective warnings during shootouts. | `/persona girlfriend`, `/girlfriend` |
@@ -89,17 +112,8 @@ Specialized operational roles with dynamic in-game stat overrides:
 
 ---
 
-## 3. Autonomous World Reactions (Ambient Intelligence)
+## 5. Technical Architecture & Memory Reference
 
-The companion doesn't just wait for orders; they automatically react to the living environment of San Andreas:
-
-1. **Severe Vehicle Collisions**:
-   - If CJ crashes the car with impact damage $\ge 50$ HP, companion screams, complains about CJ's driving, or warns him to slow down.
-2. **Car Radio Station Commentary**:
-   - The companion recognizes the current playing station (e.g. *Radio Los Santos*, *K-DST*, *Bounce FM*, *WCTR*) and shares trivia or opinions about the music genre.
-3. **Time of Day & Sunrise/Sunset**:
-   - At Dawn (5:00 - 7:00), Noon, Golden Hour (17:00 - 19:00), or Midnight (0:00 - 4:00), the companion comments on the hour and street atmosphere.
-4. **Autonomous Threat Defense**:
-   - If CJ is shot or hit by Ballas, Vagos, or street thugs on foot, companion draws their weapon and fires back instantly without needing a voice command.
-5. **Vehicle Drive-By Shooting**:
-   - When hostile vehicles or gang members shoot at CJ's car, passenger companion hangs out the window to shoot back.
+For low-level memory structure layouts, assembly calling conventions, 16-D behavioral embeddings, and Raycast Line-of-Sight mathematics, see:
+* **[Engine Internals & Reverse Engineering Specifications (`docs/ENGINE_INTERNALS.md`)](file:///d:/GTA%20san%20andreas/docs/ENGINE_INTERNALS.md)**
+* **[System Architecture & IPC Specification (`docs/ARCHITECTURE.md`)](file:///d:/GTA%20san%20andreas/docs/ARCHITECTURE.md)**
