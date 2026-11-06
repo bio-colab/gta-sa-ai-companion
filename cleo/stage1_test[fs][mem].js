@@ -75,6 +75,7 @@ let ADDR_VEHICLE_POOL = 0xB74494;
 let ADDR_WORLD_PLAYERS = 0x00B7CD98;
 let ADDR_PED_SAY = 0x005EFFE0;
 let ADDR_TASK_SEEK_COVER = 0x00654200;
+let ADDR_IS_LINE_OF_SIGHT_CLEAR = 0x0056A490;
 
 function initMemorySignatures() {
     let loadedFrom16D = false;
@@ -82,6 +83,7 @@ function initMemorySignatures() {
         if (typeof IniFile !== "undefined" && typeof IniFile.ReadString === "function") {
             let dynSay = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "ped_say");
             let dynCover = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "task_cover");
+            let dynLos = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "los_raycast");
             let dynPedPool = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "ped_pool");
             let dynVehPool = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "veh_pool");
             let dynPlayers = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "world_players");
@@ -93,6 +95,10 @@ function initMemorySignatures() {
             if (dynCover && dynCover.length > 2) {
                 let v = parseInt(dynCover, 16);
                 if (!isNaN(v) && v > 0x400000) ADDR_TASK_SEEK_COVER = v;
+            }
+            if (dynLos && dynLos.length > 2) {
+                let v = parseInt(dynLos, 16);
+                if (!isNaN(v) && v > 0x400000) ADDR_IS_LINE_OF_SIGHT_CLEAR = v;
             }
             if (dynPedPool && dynPedPool.length > 2) {
                 let v = parseInt(dynPedPool, 16);
@@ -109,7 +115,7 @@ function initMemorySignatures() {
 
             if (loadedFrom16D) {
                 let version = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "version") || "Auto-Detected";
-                log(`[REA 16-D Auto] Loaded verified dynamic addresses (${version}): PedSay=0x${ADDR_PED_SAY.toString(16)}, Cover=0x${ADDR_TASK_SEEK_COVER.toString(16)}, PedPool=0x${ADDR_PED_POOL.toString(16)}`);
+                log(`[REA 16-D Auto] Loaded verified dynamic addresses (${version}): PedSay=0x${ADDR_PED_SAY.toString(16)}, Cover=0x${ADDR_TASK_SEEK_COVER.toString(16)}, LOS=0x${ADDR_IS_LINE_OF_SIGHT_CLEAR.toString(16)}, PedPool=0x${ADDR_PED_POOL.toString(16)}`);
                 return;
             }
         }
@@ -148,6 +154,13 @@ function initMemorySignatures() {
             if (pCover) {
                 ADDR_TASK_SEEK_COVER = pCover;
                 log(`[REA AOB] Dynamic CTaskComplexSeekCover detected: 0x${ADDR_TASK_SEEK_COVER.toString(16)}`);
+            }
+
+            // النمط 5: دالة خط البصر الفيزيائي والرؤية الحاسوبية CWorld::GetIsLineOfSightClear
+            let pLos = Memory.FindPattern("83 EC 5C 66 81 3D ?? ?? ?? ?? FF FF 73 09", 0);
+            if (pLos) {
+                ADDR_IS_LINE_OF_SIGHT_CLEAR = pLos;
+                log(`[REA AOB] Dynamic CWorld::GetIsLineOfSightClear detected: 0x${ADDR_IS_LINE_OF_SIGHT_CLEAR.toString(16)}`);
             }
         }
     } catch (e) {
@@ -190,6 +203,56 @@ function getVehiclePointer(entity) {
         return objectsArray + (slot * 0xA18);
     } catch (_) {
         return 0;
+    }
+}
+
+// ====================================================================
+// REA-Neural Line-of-Sight Raycasting Vision System (0x0056A490)
+// كشف الرؤية الفيزيائية ومسار الرصاص والسواتر الحقيقية عبر هندسة العالم
+// ====================================================================
+let pRayVecStart = 0;
+let pRayVecEnd = 0;
+
+function initRaycastBuffers() {
+    try {
+        if (typeof Memory.Allocate === "function" && pRayVecStart === 0) {
+            pRayVecStart = Memory.Allocate(16);
+            pRayVecEnd = Memory.Allocate(16);
+            log(`[REA Raycast] Buffers allocated: Start=0x${pRayVecStart.toString(16)}, End=0x${pRayVecEnd.toString(16)}`);
+        }
+    } catch (e) {
+        log(`[REA Raycast Note] Allocation: ${e}`);
+    }
+}
+
+function isLineOfSightClear(x1, y1, z1, x2, y2, z2, checkBuildings = true, checkVehicles = true, checkPeds = false, checkObjects = true) {
+    if (!ADDR_IS_LINE_OF_SIGHT_CLEAR || pRayVecStart === 0 || pRayVecEnd === 0) {
+        return true;
+    }
+    try {
+        Memory.WriteFloat(pRayVecStart, x1, false);
+        Memory.WriteFloat(pRayVecStart + 4, y1, false);
+        Memory.WriteFloat(pRayVecStart + 8, z1, false);
+
+        Memory.WriteFloat(pRayVecEnd, x2, false);
+        Memory.WriteFloat(pRayVecEnd + 4, y2, false);
+        Memory.WriteFloat(pRayVecEnd + 8, z2, false);
+
+        let losFn = Memory.Fn.Cdecl(ADDR_IS_LINE_OF_SIGHT_CLEAR);
+        let res = losFn(
+            pRayVecStart,
+            pRayVecEnd,
+            checkBuildings ? 1 : 0,
+            checkVehicles ? 1 : 0,
+            checkPeds ? 1 : 0,
+            checkObjects ? 1 : 0,
+            0, // dummies
+            1, // doSeeThroughCheck
+            1  // doCameraIgnoreCheck
+        );
+        return res !== 0;
+    } catch (_) {
+        return true;
     }
 }
 
@@ -365,15 +428,30 @@ const NATIVE_SPEECH = {
     COVER: 65,          // CoverMe ("Cover me! Fall back!")
     FOLLOW: 154,        // OrderFollowNearOne ("Right behind you, CJ!")
     AGREE: 162,         // PconvAgreeGood ("Hell yeah!")
-    GREET: 166          // PconvGreetMale ("What's up, CJ?")
+    GREET: 166,         // PconvGreetMale ("What's up, CJ?")
+    HEAL: 162,          // PconvAgreeGood ("Stay with me, CJ!")
+    REVIVE: 154         // OrderFollowNearOne ("I got you CJ, back on your feet!")
 };
 
 let lastSpeechTime = 0;
 
+function isPedSpeaking(pedChar) {
+    if (!pedChar || !Char.DoesExist(pedChar)) return false;
+    try {
+        let pPed = getPedPointer(pedChar);
+        if (pPed !== 0) {
+            return Memory.ReadU8(pPed + 0x32E, false) !== 0;
+        }
+    } catch (_) {}
+    return false;
+}
+
 function makePedSpeak(pedChar, speechId, overridePriority = true) {
     if (!pedChar || !Char.DoesExist(pedChar)) return false;
     let now = Date.now();
-    if (!overridePriority && (now - lastSpeechTime < 2500)) return false;
+    // تتبع حالة النطق الحية من محرك الصوت (Zero-latency Speech Completion Tracking via 0x32E)
+    if (!overridePriority && isPedSpeaking(pedChar)) return false;
+    if (!overridePriority && (now - lastSpeechTime < 1800)) return false;
     lastSpeechTime = now;
 
     try {
@@ -631,9 +709,14 @@ function findNearbyThreat(playerChar, activePed, maxRadius) {
                     } catch (_) {}
                 }
 
-                if (isEnemy && d < bestDist) {
-                    bestDist = d;
-                    foundThreat = ped;
+                if (isEnemy) {
+                    let compPos = (activePed && Char.DoesExist(activePed)) ? activePed.getCoordinates() : pPos;
+                    let hasLOS = isLineOfSightClear(compPos.x, compPos.y, compPos.z + 0.7, pedPos.x, pedPos.y, pedPos.z + 0.7, true, true, false, true);
+                    let effectiveDist = hasLOS ? d : (d + 20.0);
+                    if (effectiveDist < bestDist) {
+                        bestDist = effectiveDist;
+                        foundThreat = ped;
+                    }
                 }
             }
             ped = World.GetRandomCharInSphereNoSaveRecursive(pPos.x, pPos.y, pPos.z, maxRadius, true, 1);
@@ -682,6 +765,94 @@ function playNpcAnimation(ped, animName, ifpName, loop, durationMs) {
         log(`[AI ERROR] Failed to play animation ${animName}: ${e}`);
     }
     return false;
+}
+
+// ====================================================================
+// REA-Neural Combat Medic CPR & Adrenaline Revival System
+// إنعاش وإسعاف CJ تلقائياً عند الاحتضار بحركات طبية واقعية وحقن الأدرينالين
+// ====================================================================
+let lastMedicRevivalTime = 0;
+let isRevivalInProgress = false;
+
+function checkAndExecuteMedicRevival(playerChar, activePed) {
+    if (!playerChar || !Char.DoesExist(playerChar)) return;
+    if (!activePed || !Char.DoesExist(activePed)) return;
+    try {
+        if (Char.IsDead(activePed)) return;
+    } catch (_) {
+        return;
+    }
+
+    let now = Date.now();
+    if (now - lastMedicRevivalTime < 18000) return; // مهلة أمان 18 ثانية
+
+    let cjHp = 100.0;
+    try {
+        cjHp = playerChar.getHealth();
+    } catch (_) {
+        return;
+    }
+
+    let pCjPed = getPedPointer(playerChar);
+    let pedState = 0;
+    if (pCjPed !== 0) {
+        try { pedState = Memory.ReadU32(pCjPed + 0x530, false); } catch (_) {}
+    }
+
+    // تفقد هل CJ مصاب إصابة حرجة جداً (صحة <= 22) أو في حالة الاحتضار (State 51)
+    let isCritical = (cjHp <= 22.0) || (pedState === 51);
+    if (!isCritical) {
+        isRevivalInProgress = false;
+        return;
+    }
+
+    // لا يتدخل الإنعاش الطبي إلا إذا كانت الشخصية مسعفاً أو بلغت الثقة 50% فأكثر
+    if (currentNpcPersona !== "medic" && companionTrust < 0.50) {
+        return;
+    }
+
+    let cjPos = playerChar.getCoordinates();
+    let compPos = activePed.getCoordinates();
+    let distToCj = Math.hypot(cjPos.x - compPos.x, cjPos.y - compPos.y, cjPos.z - compPos.z);
+
+    if (distToCj > 2.8) {
+        if (!isRevivalInProgress) {
+            isRevivalInProgress = true;
+            Text.PrintStringNow("~y~[COMBAT MEDIC] CJ is down! Rushing in for emergency resuscitation!~w~", 2500);
+            log("[COMBAT MEDIC] Player is critically wounded. Rushing to administer CPR.");
+            makePedSpeak(activePed, NATIVE_SPEECH.FOLLOW, true);
+        }
+        Task.GoToCoordAnyMeans(activePed, cjPos.x, cjPos.y, cjPos.z, 2, 0);
+    } else {
+        lastMedicRevivalTime = now;
+        isRevivalInProgress = false;
+
+        log("[COMBAT MEDIC] Executing CPR resuscitation and Adrenaline injection.");
+        Text.PrintStringNow("~g~[COMBAT MEDIC] Administering CPR and Adrenaline! Hang on CJ!~w~", 3500);
+
+        try {
+            activePed.clearTasksImmediately();
+            Task.TurnCharToFaceChar(activePed, playerChar);
+            playNpcAnimation(activePed, "CPR", "MEDIC", false, 3500);
+        } catch (_) {}
+
+        makePedSpeak(activePed, NATIVE_SPEECH.HEAL, true);
+
+        // إنعاش وإعادة صحة ودرع CJ
+        restoreCharHealthAndArmour(playerChar);
+        try {
+            if (pCjPed !== 0) {
+                Memory.WriteFloat(pCjPed + 0x540, 100.0, false);
+                Memory.WriteFloat(pCjPed + 0x548, 100.0, false);
+                if (pedState === 51) {
+                    Memory.WriteU32(pCjPed + 0x530, 0, false); // إلغاء حالة الاحتضار
+                }
+            }
+            playNpcAnimation(playerChar, "GETUP", "PED", false, 1500);
+        } catch (e) {
+            log(`[COMBAT MEDIC] Health restoration note: ${e}`);
+        }
+    }
 }
 
 // ====================================================================
@@ -742,6 +913,23 @@ function processLocalOfflineCommand(rawCmd, player, playerChar, ped) {
         makePedSpeak(ped, NATIVE_SPEECH.AGREE, true);
         Text.PrintStringNow("~g~[OFFLINE: MEDIC] Field Medic Ready! Auto-triage enabled.~w~", 3500);
         log("[OFFLINE AI] Activated Medic persona.");
+        return true;
+    } else if (cmd === "heal" || cmd === "cpr" || cmd === "revive" || cmd === "cure" || cmd === "medkit") {
+        let cjPos = playerChar.getCoordinates();
+        let pedPos = ped.getCoordinates();
+        let dist = Math.hypot(cjPos.x - pedPos.x, cjPos.y - pedPos.y, cjPos.z - pedPos.z);
+        if (dist <= 3.5) {
+            playNpcAnimation(ped, "CPR", "MEDIC", false, 3500);
+            restoreCharHealthAndArmour(playerChar);
+            restoreCharHealthAndArmour(ped);
+            makePedSpeak(ped, NATIVE_SPEECH.HEAL, true);
+            playNpcAnimation(playerChar, "GETUP", "PED", false, 1500);
+            Text.PrintStringNow("~g~[FIELD MEDIC] CPR administered! Full health restored!~w~", 3500);
+            log("[OFFLINE AI] On-demand CPR and Adrenaline revival completed.");
+        } else {
+            Task.GoToCoordAnyMeans(ped, cjPos.x, cjPos.y, cjPos.z, 7, 0);
+            Text.PrintStringNow("~y~[FIELD MEDIC] Moving to CJ to administer medical aid!~w~", 2500);
+        }
         return true;
     } else if (cmd === "companion" || cmd === "reset" || cmd === "default" || cmd === "normal") {
         currentNpcPersona = "companion";
@@ -963,6 +1151,7 @@ try {
 
 // مسح الذاكرة الحية تلقائياً عبر بصمات REA AOB لضمان التوافق المطلق مع أي نسخة من اللعبة
 initMemorySignatures();
+initRaycastBuffers();
 
 while (true) {
     wait(50);
@@ -970,6 +1159,11 @@ while (true) {
     let player = new Player(0);
     let playerChar = player.getChar();
     let now = Date.now();
+
+    // =========================================================
+    // إنعاش وإسعاف CJ القتالي التلقائي (Combat Medic Autonomous Revival)
+    // =========================================================
+    checkAndExecuteMedicRevival(playerChar, activePed);
 
     // =========================================================
     // المرحلة 2.1: مصافحة الجسر ونبضات الاتصال (Heartbeat Handshake)

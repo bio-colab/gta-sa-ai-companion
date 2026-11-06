@@ -119,9 +119,10 @@ class TestMemoryModule:
         info = get_memory_signatures_info()
         assert info["aob_scanner_supported"] is True
         assert info["target_executable"] == "gta_sa.exe"
-        assert info["signatures_count"] >= 4
+        assert info["signatures_count"] >= 5
         assert "CPedPool & CVehiclePool" in info["signatures"]
         assert "CPed::Say" in info["signatures"]
+        assert "CWorld::GetIsLineOfSightClear" in info["signatures"]
 
     def test_version_resolver_vectorize(self):
         from cli_anything.gta_companion.core.version_resolver import VersionResolver
@@ -138,4 +139,5 @@ class TestMemoryModule:
         assert "resolved_addresses" in res
         assert "ped_say" in res["resolved_addresses"]
         assert "task_cover" in res["resolved_addresses"]
+        assert "los_raycast" in res["resolved_addresses"]
         assert res["semantic_matching_engine"].startswith("REA-Neural")

@@ -23,6 +23,11 @@ MEMORY_SIGNATURES = {
         "default_addresses": {"task_ctor": "0x00654200", "vtable": "0x0086F308"},
         "purpose": "Engine native tactical crouching and vehicle cover AI",
     },
+    "CWorld::GetIsLineOfSightClear": {
+        "pattern": "83 EC 5C 66 81 3D ?? ?? ?? ?? FF FF 73 09",
+        "default_addresses": {"los_fn": "0x0056A490"},
+        "purpose": "Physics line-of-sight raycasting vision across buildings and vehicles",
+    },
 }
 
 

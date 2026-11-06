@@ -27,6 +27,10 @@ class VersionResolver:
         "task_cover": np.array([
             0.9795, 0.011, 0.0, 0.011, 0.0183, 0.0037, 0.0037, 0.0,
             0.1421, 0.1408, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+        ], dtype=np.float32),
+        "los_raycast": np.array([
+            0.7072, 0.0159, 0.0159, 0.0106, 0.0026, 0.0026, 0.0026, 0.0,
+            0.1060, 0.6777, 0.1694, 0.0, 0.0, 0.0, 0.0, 0.0
         ], dtype=np.float32)
     }
 
@@ -34,6 +38,7 @@ class VersionResolver:
     DEFAULT_ADDRESSES = {
         "ped_say": 0x005EFFE0,
         "task_cover": 0x00654200,
+        "los_raycast": 0x0056A490,
         "ped_pool": 0x00B74490,
         "veh_pool": 0x00B74494,
         "world_players": 0x00B7CD98
@@ -262,7 +267,34 @@ class VersionResolver:
         confidence["task_cover"] = round(min(best_cover_sim, 1.0), 4)
 
         # -------------------------------------------------------------
-        # 3. Resolve Entity Pools (CPedPool & CVehiclePool)
+        # 3. Resolve CWorld::GetIsLineOfSightClear (Fast AOB & 16-D Verification)
+        # -------------------------------------------------------------
+        v_ref_los = cls.REF_VECTORS["los_raycast"]
+        best_los_sim = 0.0
+        best_los_va = cls.DEFAULT_ADDRESSES["los_raycast"]
+
+        los_pat = re.escape(bytes.fromhex("83 EC 5C 66 81 3D")) + b"...." + re.escape(bytes.fromhex("FF FF 73 09"))
+        los_matches = [m.start() for m in re.finditer(los_pat, text_data)]
+        if los_matches:
+            best_los_va = image_base + vaddr + los_matches[0]
+            chunk = text_data[los_matches[0] : los_matches[0] + 64]
+            best_los_sim = float(v_ref_los.dot(cls.vectorize_function(chunk)))
+        else:
+            start_search = max(0, 0x150000 - vaddr)
+            end_search = min(len(text_data) - 64, 0x180000 - vaddr)
+            for offset in range(start_search, end_search, 16):
+                chunk = text_data[offset : offset + 64]
+                v_cand = cls.vectorize_function(chunk)
+                sim = float(v_ref_los.dot(v_cand))
+                if sim > best_los_sim:
+                    best_los_sim = sim
+                    best_los_va = image_base + vaddr + offset
+
+        resolved["los_raycast"] = best_los_va
+        confidence["los_raycast"] = round(min(best_los_sim, 1.0), 4)
+
+        # -------------------------------------------------------------
+        # 4. Resolve Entity Pools (CPedPool & CVehiclePool)
         # -------------------------------------------------------------
         # Scan for pattern: A1 [ped_pool] C3 90*10 A1 [veh_pool] C3
         import re
@@ -310,12 +342,14 @@ class VersionResolver:
 
                 cfg.set("MEMORY_DYNAMIC", "ped_say", f"0x{resolved['ped_say']:08X}")
                 cfg.set("MEMORY_DYNAMIC", "task_cover", f"0x{resolved['task_cover']:08X}")
+                cfg.set("MEMORY_DYNAMIC", "los_raycast", f"0x{resolved['los_raycast']:08X}")
                 cfg.set("MEMORY_DYNAMIC", "ped_pool", f"0x{resolved['ped_pool']:08X}")
                 cfg.set("MEMORY_DYNAMIC", "veh_pool", f"0x{resolved['veh_pool']:08X}")
                 cfg.set("MEMORY_DYNAMIC", "world_players", f"0x{resolved['world_players']:08X}")
                 cfg.set("MEMORY_DYNAMIC", "version", version_label)
                 cfg.set("MEMORY_DYNAMIC", "say_confidence", str(confidence.get("ped_say", 1.0)))
                 cfg.set("MEMORY_DYNAMIC", "cover_confidence", str(confidence.get("task_cover", 1.0)))
+                cfg.set("MEMORY_DYNAMIC", "los_confidence", str(confidence.get("los_raycast", 1.0)))
                 cfg.set("MEMORY_DYNAMIC", "resolver_method", "16D_SEMANTIC_BEHAVIORAL_MATCH")
 
                 with open(target_ini, "w", encoding="utf-8") as out_f:

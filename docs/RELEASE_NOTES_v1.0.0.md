@@ -13,17 +13,20 @@ This milestone introduces universal binary compatibility across all major game v
 ### 1. Dual-Tier Intelligence Architecture
 - **Tier 1: 100% Offline Native Engine (Zero Cost / Zero Internet)**:
   - Operates completely locally without requiring cloud API keys, external servers, or an internet connection.
-  - Leverages authentic in-engine 3D ped speech (`CPed::Say` at `0x005EFFE0`) with authentic audio voice banks and facial lip-sync.
+  - Leverages authentic in-engine 3D ped speech (`CPed::Say` at `0x005EFFE0`) with authentic audio voice banks, facial lip-sync, and zero-latency audio completion tracking (`m_pedAudio + 0x9A` / `pPed + 0x32E`).
   - Features engine-level tactical cover seeking (`CTaskComplexSeekCoverUntilTargetDead` at `0x00654200` and opcode `0787`).
+  - **Physics Line-of-Sight Raycasting Vision (`CWorld::GetIsLineOfSightClear` at `0x0056A490`)**: Calculates real 3D sightlines through buildings and vehicles for target priority and intelligent cover.
+  - **Combat Medic CPR & Adrenaline Resuscitation**: When CJ suffers critical damage or enters dying state (`m_nPedState == 51`), the companion rushes in to perform CPR resuscitation and adrenaline revival.
   - Built-in autonomous personas: `/hitman`, `/driver`, `/heavy`, `/medic`.
-  - Comprehensive field command bar accessible via `/` in-game (`/heal`, `/gun`, `/bring`, `/distract`, `/drive`, `/cover`).
+  - Comprehensive field command bar accessible via `/` in-game (`/heal`, `/cpr`, `/gun`, `/bring`, `/distract`, `/drive`, `/cover`).
 - **Tier 2: Optional Cloud Augmented Intelligence**:
   - Connects seamlessly to free-tier Groq Cloud (Whisper Large v3 + LLaMA 3.3 / Qwen 2.5) or OpenRouter when internet is present.
   - Push-to-talk microphone interaction with real-time transcription and voice synthesis.
   - Episodic memory system backed by SQLite (`memory.db`) capturing player-companion shared history and trust metrics.
 
-### 2. Universal Binary Compatibility (Dynamic AOB Scanning)
-- Replaces fixed hardcoded memory offsets with runtime Array-of-Bytes (AOB) signature scanning.
+### 2. Universal Binary Compatibility & 16-D Semantic Resolver
+- Automated Cross-Version Memory Signature Resolver (`cli-anything-gta memory resolve`) using 16-D behavioral vector embeddings.
+- In-memory runtime Array-of-Bytes (AOB) signature scanning fallback.
 - Verified compatibility across:
   - GTA SA v1.0 US (14,383,616 bytes)
   - GTA SA v1.01 EU / Australian
@@ -39,7 +42,7 @@ This milestone introduces universal binary compatibility across all major game v
 
 ### 4. Rigorous Continuous Integration & Quality Assurance
 - Automated GitHub Actions CI workflow running on Windows runners.
-- 21/21 Unit and End-to-End subprocess tests covering telemetry, session management, weapon mapping, order dispatch, and CLI JSON contracts.
+- 24/24 Unit and End-to-End subprocess tests covering telemetry, session management, weapon mapping, order dispatch, memory signatures, 16-D vectorization, and CLI JSON contracts.
 - Automated syntax validation of CLEO JavaScript code (`node -c`).
 
 ---
