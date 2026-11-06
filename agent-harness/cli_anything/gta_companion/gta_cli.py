@@ -154,14 +154,28 @@ def cmd_companion_dismiss(ctx: click.Context, use_json: bool):
     handle_output(res, is_json, title="Companion Dismissed")
 
 
-@cli.command("memory")
+@cli.group("memory", invoke_without_command=True)
 @click.option("--json", "use_json", is_flag=True, help="Output in machine-readable JSON format.")
 @click.pass_context
-def cmd_memory(ctx: click.Context, use_json: bool):
-    """Inspect REA reverse engineered AOB signatures and memory structures."""
+def grp_memory(ctx: click.Context, use_json: bool):
+    """Inspect and resolve REA reverse engineered signatures and memory structures."""
+    if ctx.invoked_subcommand is None:
+        is_json = use_json or ctx.obj.get("json", False)
+        mem = get_memory_signatures_info()
+        handle_output(mem, is_json, title="REA Memory Signatures & Offsets")
+
+
+@grp_memory.command("resolve")
+@click.option("--exe", type=click.Path(exists=True), help="Target executable path (default: auto-detect gta_sa.exe).")
+@click.option("--no-ini", is_flag=True, help="Do not write resolved addresses to ainpc_bridge.ini.")
+@click.option("--json", "use_json", is_flag=True, help="Output in machine-readable JSON format.")
+@click.pass_context
+def cmd_memory_resolve(ctx: click.Context, exe: Optional[str], no_ini: bool, use_json: bool):
+    """Autonomously resolve memory signatures for any GTA SA version using REA-Neural 16-D matching."""
+    from cli_anything.gta_companion.core.version_resolver import VersionResolver
     is_json = use_json or ctx.obj.get("json", False)
-    mem = get_memory_signatures_info()
-    handle_output(mem, is_json, title="REA Memory Signatures & Offsets")
+    res = VersionResolver.resolve_signatures(exe_path=exe, write_ini=not no_ini)
+    handle_output(res, is_json, title="REA-Neural 16-D Semantic Signature Resolution")
 
 
 @cli.group("config")
@@ -237,6 +251,7 @@ def cmd_repl(ctx: click.Context):
                     "companion speak <event>": "Trigger authentic 3D native speech with lip-sync",
                     "companion dismiss": "Safely dismiss companion",
                     "memory": "Inspect REA AOB signatures and memory pools",
+                    "memory resolve": "Auto-resolve addresses using REA-Neural 16-D matching",
                     "config show": "Display bridge configuration",
                     "exit": "Quit the REPL interface",
                 }

@@ -67,17 +67,58 @@ function isSameEntity(a, b) {
 }
 
 // ====================================================================
-// REA Level 2/3 Hardware Pointers & Universal AOB Memory Scanner
+// REA Level 2/3 Hardware Pointers & Universal 16-D Semantic Resolver
 // ====================================================================
+const INI_FILE = "cleo/ainpc_bridge.ini";
 let ADDR_PED_POOL = 0xB74490;
 let ADDR_VEHICLE_POOL = 0xB74494;
 let ADDR_WORLD_PLAYERS = 0x00B7CD98;
 let ADDR_PED_SAY = 0x005EFFE0;
+let ADDR_TASK_SEEK_COVER = 0x00654200;
 
 function initMemorySignatures() {
+    let loadedFrom16D = false;
+    try {
+        if (typeof IniFile !== "undefined" && typeof IniFile.ReadString === "function") {
+            let dynSay = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "ped_say");
+            let dynCover = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "task_cover");
+            let dynPedPool = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "ped_pool");
+            let dynVehPool = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "veh_pool");
+            let dynPlayers = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "world_players");
+
+            if (dynSay && dynSay.length > 2) {
+                let v = parseInt(dynSay, 16);
+                if (!isNaN(v) && v > 0x400000) { ADDR_PED_SAY = v; loadedFrom16D = true; }
+            }
+            if (dynCover && dynCover.length > 2) {
+                let v = parseInt(dynCover, 16);
+                if (!isNaN(v) && v > 0x400000) ADDR_TASK_SEEK_COVER = v;
+            }
+            if (dynPedPool && dynPedPool.length > 2) {
+                let v = parseInt(dynPedPool, 16);
+                if (!isNaN(v) && v > 0x400000) ADDR_PED_POOL = v;
+            }
+            if (dynVehPool && dynVehPool.length > 2) {
+                let v = parseInt(dynVehPool, 16);
+                if (!isNaN(v) && v > 0x400000) ADDR_VEHICLE_POOL = v;
+            }
+            if (dynPlayers && dynPlayers.length > 2) {
+                let v = parseInt(dynPlayers, 16);
+                if (!isNaN(v) && v > 0x400000) ADDR_WORLD_PLAYERS = v;
+            }
+
+            if (loadedFrom16D) {
+                let version = IniFile.ReadString(INI_FILE, "MEMORY_DYNAMIC", "version") || "Auto-Detected";
+                log(`[REA 16-D Auto] Loaded verified dynamic addresses (${version}): PedSay=0x${ADDR_PED_SAY.toString(16)}, Cover=0x${ADDR_TASK_SEEK_COVER.toString(16)}, PedPool=0x${ADDR_PED_POOL.toString(16)}`);
+                return;
+            }
+        }
+    } catch (_) {}
+
+    // القناة الاحتياطية الميدانية في حال عدم توفر ملف التهيئة: فحص أنماط الذاكرة الحية (In-Memory AOB Scanner)
     try {
         if (typeof Memory.FindPattern === "function") {
-            // Pattern 1: CPools::GetPedPool and CPools::GetVehiclePool
+            // النمط 1: أحواض المشاة والمركبات
             let pPools = Memory.FindPattern("A1 ?? ?? ?? ?? C3 90 90 90 90 90 90 90 90 90 90 A1 ?? ?? ?? ?? C3", 0);
             if (pPools) {
                 let dynamicPedPool = Memory.ReadU32(pPools + 1, false);
@@ -87,7 +128,7 @@ function initMemorySignatures() {
                 log(`[REA AOB] Dynamic Pools detected: PedPool=0x${ADDR_PED_POOL.toString(16)}, VehPool=0x${ADDR_VEHICLE_POOL.toString(16)}`);
             }
 
-            // Pattern 2: FindPlayerPed -> CWorld::Players[0].m_pPed
+            // النمط 2: مؤشر مصفوفة اللاعب CWorld::Players[0].m_pPed
             let pFindPlayer = Memory.FindPattern("69 C0 90 01 00 00 8B 80 ?? ?? ?? ?? C3", 0);
             if (pFindPlayer) {
                 let dynamicPlayers = Memory.ReadU32(pFindPlayer + 8, false);
@@ -95,11 +136,18 @@ function initMemorySignatures() {
                 log(`[REA AOB] Dynamic CWorld::Players detected: 0x${ADDR_WORLD_PLAYERS.toString(16)}`);
             }
 
-            // Pattern 3: CPed::Say
+            // النمط 3: نطق الصوت الأصلي CPed::Say
             let pSay = Memory.FindPattern("8B 44 24 04 66 85 C0 74 2A 8B 54 24 18 52", 0);
             if (pSay) {
                 ADDR_PED_SAY = pSay;
                 log(`[REA AOB] Dynamic CPed::Say detected: 0x${ADDR_PED_SAY.toString(16)}`);
+            }
+
+            // النمط 4: دالة السواتر التكتيكية CTaskComplexSeekCoverUntilTargetDead
+            let pCover = Memory.FindPattern("0E C7 06 08 F3 86 00 8B 02 8D 4E 10", 0);
+            if (pCover) {
+                ADDR_TASK_SEEK_COVER = pCover;
+                log(`[REA AOB] Dynamic CTaskComplexSeekCover detected: 0x${ADDR_TASK_SEEK_COVER.toString(16)}`);
             }
         }
     } catch (e) {
@@ -205,8 +253,6 @@ let activePedBlip = null;
 let currentBlipDisplay = -1;
 let lastBlipUpdate = 0;
 let lastFollowCheck = 0;
-
-const INI_FILE = "cleo/ainpc_bridge.ini";
 
 // دالة التحكم الديناميكي في علامة الرادار والمجسم ثلاثي الأبعاد
 function updateCompanionBlip(playerChar, activePed) {

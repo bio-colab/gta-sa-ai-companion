@@ -704,6 +704,20 @@ def main():
     input_t = threading.Thread(target=input_thread_func, daemon=True)
     input_t.start()
 
+    # -------------------------------------------------------------
+    # الفحص الذاتي التلقائي لذاكرة اللعبة عبر REA-Neural 16-D Semantic Matching
+    # -------------------------------------------------------------
+    try:
+        from version_resolver import VersionResolver
+        log("[REA-Neural] Running autonomous 16-D behavioral signature resolver...")
+        res_info = VersionResolver.resolve_signatures(write_ini=True, ini_path=INI_PATH)
+        if res_info.get("status") == "success":
+            v_label = res_info.get("version_detected", "Unknown")
+            addrs = res_info.get("resolved_addresses", {})
+            log(f"[REA-Neural] Detected GTA SA {v_label} | Dynamic Memory: PedSay={addrs.get('ped_say')}, Cover={addrs.get('task_cover')}, Pools={addrs.get('ped_pool')}")
+    except Exception as e:
+        log(f"[REA-Neural Warning] Auto-resolution skipped: {e}")
+
     # تنظيف أي حالة سابقة في ملف الجسر لتفادي أي بيانات شبحية من جلسات قديمة
     gta_active = is_gta_running()
     if not gta_active:

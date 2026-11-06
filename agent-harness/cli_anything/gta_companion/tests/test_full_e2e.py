@@ -102,6 +102,14 @@ class TestCLISubprocess:
         assert data["aob_scanner_supported"] is True
         assert "CPedPool & CVehiclePool" in data["signatures"]
 
+    def test_memory_resolve_json(self):
+        res = self._run(["memory", "resolve", "--no-ini", "--json"])
+        assert res.returncode == 0
+        data = json.loads(res.stdout)
+        assert "resolved_addresses" in data
+        assert "ped_say" in data["resolved_addresses"]
+        assert "task_cover" in data["resolved_addresses"]
+
     def test_config_show_json(self):
         res = self._run(["config", "show", "--json"])
         assert res.returncode == 0

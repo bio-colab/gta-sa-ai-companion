@@ -122,3 +122,20 @@ class TestMemoryModule:
         assert info["signatures_count"] >= 4
         assert "CPedPool & CVehiclePool" in info["signatures"]
         assert "CPed::Say" in info["signatures"]
+
+    def test_version_resolver_vectorize(self):
+        from cli_anything.gta_companion.core.version_resolver import VersionResolver
+        raw_code = bytes.fromhex("8B 44 24 04 66 85 C0 74 2A 8B 54 24 18 52 E8 00 00 00 00 C3")
+        vec = VersionResolver.vectorize_function(raw_code)
+        assert len(vec) == 16
+        import numpy as np
+        assert abs(float(np.linalg.norm(vec)) - 1.0) < 1e-4
+
+    def test_version_resolver_resolve_signatures(self):
+        from cli_anything.gta_companion.core.version_resolver import VersionResolver
+        res = VersionResolver.resolve_signatures(write_ini=False)
+        assert "status" in res
+        assert "resolved_addresses" in res
+        assert "ped_say" in res["resolved_addresses"]
+        assert "task_cover" in res["resolved_addresses"]
+        assert res["semantic_matching_engine"].startswith("REA-Neural")
